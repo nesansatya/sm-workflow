@@ -100,13 +100,14 @@
         .mob-nav{display:none}
         @media(max-width:768px){
           .desk-nav{display:none!important}
-          .mob-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:#0a0e18;border-top:1px solid #111827;z-index:300;padding:4px 2px;padding-bottom:max(4px,env(safe-area-inset-bottom));overflow-x:auto;gap:1px}
+          .mob-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:#0d1117;border-top:1px solid #1e293b;z-index:300;padding:6px 4px;padding-bottom:max(6px,env(safe-area-inset-bottom));overflow-x:auto;gap:2px}
           .mob-nav::-webkit-scrollbar{display:none}
-          .mnb{flex:1;min-width:48px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:none;border:none;cursor:pointer;padding:5px 2px;border-radius:8px;font-family:inherit;gap:2px}
-          .mnb.on{background:#0f1e35}
-          .mnb .mi{font-size:17px;line-height:1}
-          .mnb .ml{font-size:8.5px;font-weight:700;color:#475569;white-space:nowrap;letter-spacing:0.01em}
-          .mnb.on .ml{color:#a5b4fc}
+          .mnb{flex:1;min-width:50px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:none;border:none;cursor:pointer;padding:6px 3px;border-radius:10px;font-family:inherit;gap:3px;position:relative}
+          .mnb.on{background:#1a2235}
+          .mnb .mi{font-size:19px;line-height:1;opacity:0.55}
+          .mnb.on .mi{opacity:1}
+          .mnb .ml{font-size:9px;font-weight:700;color:#64748b;white-space:nowrap;letter-spacing:0.01em}
+          .mnb.on .ml{color:#818cf8}
           .main-content{padding-bottom:72px!important;padding-left:12px!important;padding-right:12px!important;padding-top:14px!important}
           .hdr-entity{display:none!important}
           .hdr-newcase{display:none!important}
@@ -130,19 +131,17 @@
 
   try {
     var App = window.__App;
-    if (!App) throw new Error("App component not found — __App is " + typeof window.__App);
+    if (!App) throw new Error("App not found");
     document.getElementById('loading').style.display = 'none';
     var root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(React.createElement(App));
   } catch(e) {
     document.getElementById('loading').innerHTML =
       '<div style="color:#f87171;font-size:14px;padding:32px;max-width:480px;text-align:center">' +
-      '<div style="font-size:32px;margin-bottom:16px">&#9888;</div>' +
-      '<strong>App failed to start</strong><br><br>' +
+      '<div style="font-size:32px;margin-bottom:16px">&#9888;</div><strong>App failed to start</strong><br><br>' +
       '<code style="background:#0a0e18;border:1px solid #1e293b;padding:10px;border-radius:8px;font-size:11px;display:block;text-align:left;word-break:break-all">' +
       e.message + '</code>' +
-      '<button onclick="location.reload()" style="margin-top:16px;background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px">Reload</button>' +
-      '</div>';
+      '<button onclick="location.reload()" style="margin-top:16px;background:#6366f1;color:white;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px">Reload</button></div>';
     console.error('Boot error:', e);
   }
   </script>
