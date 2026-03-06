@@ -1,0 +1,2010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="theme-color" content="#060912"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="SM Workflow"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <title>SM Group — Workflow & KPI</title>
+
+  <!-- PWA Manifest inline -->
+  <link rel="manifest" href="manifest.json"/>
+
+  <!-- App icon placeholder (inline SVG as data URL) -->
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='80' fill='%23060912'/%3E%3Crect x='60' y='60' width='392' height='392' rx='60' fill='url(%23g)'/%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ctext x='256' y='330' font-size='240' font-weight='900' text-anchor='middle' fill='white' font-family='Arial'%3ES%3C/text%3E%3C/svg%3E"/>
+
+  <!-- React + Babel from CDN (works offline after first load) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { background: #060912; overflow-x: hidden; }
+    /* Prevent iOS tap highlight */
+    * { -webkit-tap-highlight-color: transparent; }
+    /* Safe area for notch phones */
+    body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Storage shim: uses localStorage as backend (works in any browser) -->
+  <script>
+    window.storage = {
+      _prefix: "smwf_",
+      get: function(key) {
+        return new Promise(function(resolve, reject) {
+          try {
+            var val = localStorage.getItem(window.storage._prefix + key);
+            if (val === null) { reject(new Error("Key not found: " + key)); return; }
+            resolve({ key: key, value: val });
+          } catch(e) { reject(e); }
+        });
+      },
+      set: function(key, value) {
+        return new Promise(function(resolve, reject) {
+          try {
+            localStorage.setItem(window.storage._prefix + key, value);
+            resolve({ key: key, value: value });
+          } catch(e) { reject(e); }
+        });
+      },
+      delete: function(key) {
+        return new Promise(function(resolve) {
+          localStorage.removeItem(window.storage._prefix + key);
+          resolve({ key: key, deleted: true });
+        });
+      },
+      list: function(prefix) {
+        return new Promise(function(resolve) {
+          var keys = [];
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && k.startsWith(window.storage._prefix + (prefix||""))) {
+              keys.push(k.replace(window.storage._prefix, ""));
+            }
+          }
+          resolve({ keys: keys });
+        });
+      }
+    };
+
+    // Register service worker for offline support
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function() {
+        navigator.serviceWorker.register("sw.js").catch(function(){});
+      });
+    }
+  </script>
+
+  <!-- App component (transpiled by Babel in browser) -->
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect } = React;
+
+
+// ─── DEPT / BRANCH COLORS ─────────────────────────────────────────────────────
+const BRANCHES = ["KL","Seremban"];
+const DEPARTMENTS = ["Audit","Accounts","Tax","Secretary"];
+const COMPANY_TYPES = ["Sdn Bhd","LLP","PLT","Sole Proprietor","Partnership","Berhad"];
+const PRIORITIES = ["Low","Normal","High","Urgent"];
+const PRIORITY_COLORS = { Low:"#64748b", Normal:"#38bdf8", High:"#f59e0b", Urgent:"#ef4444" };
+const DEPT_COLORS = {
+  Audit:     { accent:"#f59e0b", bg:"#1c1500", border:"#92400e", light:"#f59e0b18" },
+  Accounts:  { accent:"#06b6d4", bg:"#001c1f", border:"#164e63", light:"#06b6d418" },
+  Tax:       { accent:"#a78bfa", bg:"#13001f", border:"#5b21b6", light:"#a78bfa18" },
+  Secretary: { accent:"#34d399", bg:"#001a10", border:"#065f46", light:"#34d39918" },
+};
+const BRANCH_COLORS = { KL:"#f97316", Seremban:"#38bdf8" };
+
+// ─── KPI ──────────────────────────────────────────────────────────────────────
+const KPI_MULT = 4.3;
+const CUR_YEAR = new Date().getFullYear();
+const CUR_MONTH = new Date().getMonth();
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const KPI_MILESTONES = [
+  { pct:25,  icon:"🌱", msg:"Great start! You're on the board.",         color:"#34d399" },
+  { pct:50,  icon:"⚡", msg:"Halfway there — momentum building!",         color:"#38bdf8" },
+  { pct:75,  icon:"🔥", msg:"75% done — bonus territory in sight!",       color:"#f59e0b" },
+  { pct:100, icon:"🏆", msg:"KPI ACHIEVED! Bonus eligible!",              color:"#a78bfa" },
+  { pct:120, icon:"🚀", msg:"Superstar! You've gone beyond the target!",  color:"#f43f5e" },
+];
+const MOTIV = [
+  "Every ringgit collected is one step closer to your bonus. Keep going! 💪",
+  "Your dedication today is your bonus tomorrow. Stay consistent!",
+  "The finish line is closer than you think. Push through!",
+  "Each case closed is a step towards financial freedom. You've got this!",
+  "Great performers don't wait for motivation — they create it.",
+];
+
+// ─── SECRETARY ────────────────────────────────────────────────────────────────
+const SEC_SERVICE_TYPES = [
+  { id:"retainer",   label:"Yearly Secretarial Retainer",    billing:"Every 6 months" },
+  { id:"annual_ret", label:"Annual Return (MBRS)",           billing:"Yearly" },
+  { id:"resolution", label:"Resolutions",                    billing:"When required" },
+  { id:"ctc",        label:"Certified True Copy (CTC)",      billing:"When required" },
+  { id:"mbrs",       label:"MBRS Submission",                billing:"Per submission" },
+  { id:"incorp",     label:"Company Incorporation",          billing:"One-time" },
+  { id:"statutory",  label:"Statutory Documents",            billing:"When required" },
+  { id:"advanced",   label:"Advanced Filings (EOT/AR POS)",  billing:"When required" },
+];
+const SEC_SUB_TASKS = {
+  resolution:["AGM Documents","Annual Return Resolutions","Banking Resolutions","Property Purchase","Director Appointment/Resignation","Dividend Declaration","Tender Documentation","Motor Vehicle Purchase/Disposal","Share Transfer"],
+  annual_ret:["Preparation of Annual Return","Beneficial Ownership Info","Convert FS to ZIP/XBRL","Upload & Submit via MBRS Portal"],
+  ctc:["Secretary CTC","Auditor CTC for Audit Reports"],
+  incorp:["Company Name Search","Prepare Super Form Section 14","Submit & Complete Incorporation"],
+  statutory:["PD2 – Change of Nature of Business","Director Vacating Office","Director Resignation","Check Compounds & Compliance Status"],
+  advanced:["Extension of Time (EOT) Application","AR POS (Vacate Office) Filing"],
+  mbrs:["Prepare MBRS Documents","Upload to MBRS Portal","Submit & Obtain Confirmation"],
+  retainer:["Update Secretarial Files","Maintain Company Records","Update Server Records"],
+};
+
+// ─── WORKFLOW STAGES ──────────────────────────────────────────────────────────
+const SEC_BASE_STAGES = [
+  { id:"S1",  label:"Request / Assignment",           notify:["assignee","manager"] },
+  { id:"S2",  label:"Document Collection & Review",   notify:["assignee"] },
+  { id:"S3",  label:"Preparation of Documents",       notify:["assignee"] },
+  { id:"S4",  label:"Internal Review by Manager",     notify:["manager","assignee"] },
+  { id:"S5",  label:"Amendments (if required)",       notify:["assignee","manager"] },
+  { id:"S6",  label:"Client / Portal Submission",     notify:["assignee","manager"] },
+  { id:"S7",  label:"Confirmation / Acknowledgement", notify:["assignee","manager"] },
+  { id:"S8",  label:"Invoice Issued",                 notify:["assignee","manager"] },
+  { id:"S9",  label:"Payment Follow-up",              notify:["assignee","manager"] },
+  { id:"S10", label:"Payment Received – Case Closed", notify:["assignee","manager"] },
+];
+const SEC_MBRS_STAGES = [
+  { id:"MB1", label:"Receive Audit Report from Audit Dept", notify:["assignee","audit_dept","manager"], crossDept:"Audit" },
+  { id:"MB2", label:"Convert FS to ZIP/XBRL Format",        notify:["assignee"] },
+  { id:"MB3", label:"Prepare Annual Return Documents",       notify:["assignee"] },
+  { id:"MB4", label:"Prepare Beneficial Ownership Info",     notify:["assignee"] },
+  { id:"MB5", label:"Manager Review",                        notify:["manager","assignee"] },
+  { id:"MB6", label:"Upload & Submit via MBRS Portal",       notify:["assignee","manager"] },
+  { id:"MB7", label:"Obtain Submission Confirmation",        notify:["assignee","manager"] },
+  { id:"MB8", label:"Invoice Issued by Audit Dept",          notify:["assignee","audit_dept","manager"], crossDept:"Audit" },
+  { id:"MB9", label:"Payment Follow-up",                     notify:["assignee","manager"] },
+  { id:"MB10",label:"Payment Received – Case Closed",        notify:["assignee","manager"] },
+];
+const AUDIT_STAGES = [
+  { id:"A1",  label:"Case Assigned",                notify:["assignee","manager"] },
+  { id:"A2",  label:"Fieldwork In Progress",         notify:["assignee"] },
+  { id:"A3",  label:"1st Draft Audit Report",        notify:["assignee","tax_dept","manager"], crossDept:"Tax" },
+  { id:"A4",  label:"Tax Review (Simultaneous)",     notify:["assignee","tax_dept","manager"] },
+  { id:"A5",  label:"Manager Review",                notify:["manager","assignee"] },
+  { id:"A6",  label:"Amendments / Adjustments",      notify:["assignee","manager"] },
+  { id:"A7",  label:"Final Report Signed",           notify:["assignee","manager","secretary_dept"] },
+  { id:"A8",  label:"Report Compilation (5 copies)", notify:["assignee","tax_dept","secretary_dept"], crossDept:"Secretary" },
+  { id:"A9",  label:"Handed to Client",              notify:["assignee","manager"] },
+  { id:"A10", label:"Invoice Issued",                notify:["assignee","manager"] },
+  { id:"A11", label:"Payment Received",              notify:["assignee","manager"] },
+];
+const ACCOUNTS_STAGES = [
+  { id:"AC1", label:"Documents Received",           notify:["assignee"] },
+  { id:"AC2", label:"Work Allocation",              notify:["assignee","manager"] },
+  { id:"AC3", label:"Document Verification",        notify:["assignee"] },
+  { id:"AC4", label:"Data Entry (SQL Accounts)",    notify:["assignee"] },
+  { id:"AC5", label:"Finalisation",                 notify:["assignee","manager"] },
+  { id:"AC6", label:"1st Review by Manager",        notify:["manager","assignee"] },
+  { id:"AC7", label:"Amendments / Adjustments",     notify:["assignee","manager"] },
+  { id:"AC8", label:"2nd Review / Approval",        notify:["manager","assignee"] },
+  { id:"AC9", label:"Sent to Client for Approval",  notify:["assignee"] },
+  { id:"AC10",label:"Passed to Audit Dept",         notify:["assignee","audit_dept","manager"], crossDept:"Audit" },
+];
+const TAX_STAGES = [
+  { id:"T1",  label:"Tax Draft Initiated",          notify:["assignee","manager"] },
+  { id:"T2",  label:"Tax Dept Review",              notify:["assignee","manager"] },
+  { id:"T3",  label:"File Passed to Manager",       notify:["manager","assignee"] },
+  { id:"T4",  label:"Manager Approval",             notify:["manager","assignee"] },
+  { id:"T5",  label:"Tax Computation Prepared",     notify:["assignee"] },
+  { id:"T6",  label:"Signing Pages Requested",      notify:["assignee","audit_dept"] },
+  { id:"T7",  label:"Signing Pages Received",       notify:["assignee","manager"] },
+  { id:"T8",  label:"Portal Submission (TAEF)",     notify:["assignee","manager"] },
+  { id:"T9",  label:"Invoice Issued",               notify:["assignee","manager"] },
+  { id:"T10", label:"Tax Booklet Prepared",         notify:["assignee","audit_dept"] },
+  { id:"T11", label:"Payment Follow-up",            notify:["assignee","manager"] },
+  { id:"T12", label:"Payment Received",             notify:["assignee","manager"] },
+];
+const STAGES_MAP = { Audit:AUDIT_STAGES, Accounts:ACCOUNTS_STAGES, Tax:TAX_STAGES, Secretary:SEC_BASE_STAGES };
+
+function getStages(c) {
+  if (c?.department !== "Secretary") return STAGES_MAP[c?.department] || [];
+  return (c?.secServiceType === "mbrs" || c?.secServiceType === "annual_ret") ? SEC_MBRS_STAGES : SEC_BASE_STAGES;
+}
+
+// ─── INITIAL DATA ─────────────────────────────────────────────────────────────
+const INIT_STAFF = [
+  { id:"admin1", name:"Nesan",         email:"nesan@smgroup.my",    role:"admin",   department:"Tax",       branch:"KL",       password:"admin888",   salary:0 },
+  { id:"mgr1",   name:"Thamo",         email:"thamo@smgroup.my",    role:"manager", department:"All",       branch:"KL",       password:"manager123", salary:0 },
+  { id:"s1",     name:"Ahmad Razif",   email:"razif@smgroup.my",    role:"staff",   department:"Audit",     branch:"KL",       password:"staff123",   salary:3000 },
+  { id:"s2",     name:"Nurul Hana",    email:"hana@smgroup.my",     role:"staff",   department:"Audit",     branch:"Seremban", password:"staff123",   salary:2800 },
+  { id:"s3",     name:"Priya Nair",    email:"priya@smgroup.my",    role:"staff",   department:"Tax",       branch:"KL",       password:"staff123",   salary:3200 },
+  { id:"s4",     name:"Kelvin Tan",    email:"kelvin@smgroup.my",   role:"staff",   department:"Tax",       branch:"Seremban", password:"staff123",   salary:2900 },
+  { id:"s5",     name:"Siti Aminah",   email:"siti@smgroup.my",     role:"staff",   department:"Accounts",  branch:"KL",       password:"staff123",   salary:2600 },
+  { id:"s6",     name:"Farizal Musa",  email:"farizal@smgroup.my",  role:"staff",   department:"Audit",     branch:"Seremban", password:"staff123",   salary:2700 },
+  { id:"s7",     name:"Laila Rashid",  email:"laila@smgroup.my",    role:"staff",   department:"Secretary", branch:"KL",       password:"staff123",   salary:2500 },
+  { id:"s8",     name:"Mei Ling",      email:"meiling@smgroup.my",  role:"staff",   department:"Secretary", branch:"Seremban", password:"staff123",   salary:2400 },
+];
+const INIT_CASES = [
+  { id:"AUD-2024-001", entity:"SM Associates PLT",          department:"Audit",     branch:"KL",       clientName:"Syarikat Maju Jaya Sdn Bhd", companyType:"Sdn Bhd", fye:"2023-12-31", assignedTo:"Ahmad Razif",  assignedId:"s1", manager:"Thamo", stage:"A4",  priority:"High",   fee:3500, feeStatus:"Pending",  deadline:"2026-03-20", createdAt:"2026-02-01", linkedTax:true,  notes:"Tax review ongoing.", taxFinalisationDeadline:"2024-07-31", taxSubmissionDeadline:"2024-08-31", mtrsDeadline:null, t8DoneDate:null },
+  { id:"AUD-2024-002", entity:"SM Associates PLT",          department:"Audit",     branch:"Seremban", clientName:"Farizal & Partners LLP",      companyType:"LLP",    fye:"2023-12-31", assignedTo:"Nurul Hana",  assignedId:"s2", manager:"Thamo", stage:"A8",  priority:"Normal", fee:2800, feeStatus:"Invoiced", deadline:"2026-03-10", createdAt:"2026-01-15", linkedTax:false, notes:"Compilation in progress." },
+  { id:"TAX-2024-001", entity:"SM Tax Services Sdn Bhd",    department:"Tax",       branch:"KL",       clientName:"Syarikat Maju Jaya Sdn Bhd", companyType:"Sdn Bhd", fye:"2023-12-31", assignedTo:"Priya Nair",  assignedId:"s3", manager:"Thamo", stage:"T4",  priority:"High",   fee:1200, feeStatus:"Pending",  deadline:"2024-08-31", createdAt:"2026-02-01", linkedAudit:"AUD-2024-001", notes:"Linked to AUD-2024-001.", taxFinalisationDeadline:"2024-07-31", taxSubmissionDeadline:"2024-08-31", mtrsDeadline:null, t8DoneDate:null },
+  { id:"ACC-2024-001", entity:"SM Corporate House Sdn Bhd", department:"Accounts",  branch:"KL",       clientName:"Kelvin Trading Sdn Bhd",     companyType:"Sdn Bhd", fye:"2023-06-30", assignedTo:"Siti Aminah", assignedId:"s5", manager:"Thamo", stage:"AC4", priority:"Normal", fee:1800, feeStatus:"Pending",  deadline:"2026-03-25", createdAt:"2026-02-10", notes:"Data entry into SQL." },
+  { id:"AUD-2024-003", entity:"SM Associates PLT",          department:"Audit",     branch:"KL",       clientName:"TechVenture PLT",            companyType:"PLT",    fye:"2024-03-31", assignedTo:"Farizal Musa", assignedId:"s6", manager:"Thamo", stage:"A2", priority:"Urgent",  fee:4200, feeStatus:"Pending",  deadline:"2026-03-08", createdAt:"2026-02-20", notes:"Fieldwork started." },
+  { id:"SEC-2024-001", entity:"SM Corporate House Sdn Bhd", department:"Secretary", branch:"KL",       clientName:"Syarikat Maju Jaya Sdn Bhd", companyType:"Sdn Bhd", fye:"2023-12-31", assignedTo:"Laila Rashid",assignedId:"s7", manager:"Thamo", stage:"MB3", priority:"High",   fee:450,  feeStatus:"Pending",  deadline:"2026-03-18", createdAt:"2026-02-15", secServiceType:"annual_ret", secSubTasks:["Prepare Annual Return"], linkedAudit:"AUD-2024-001", notes:"MBRS submission." },
+  { id:"SEC-2024-002", entity:"SM Corporate House Sdn Bhd", department:"Secretary", branch:"KL",       clientName:"TechVenture PLT",            companyType:"PLT",    fye:"2024-03-31", assignedTo:"Laila Rashid",assignedId:"s7", manager:"Thamo", stage:"S3",  priority:"Normal", fee:300,  feeStatus:"Pending",  deadline:"2026-03-28", createdAt:"2026-02-20", secServiceType:"resolution", secSubTasks:["Director Appointment/Resignation"], notes:"Director change." },
+  { id:"SEC-2024-003", entity:"SM Corporate House Sdn Bhd", department:"Secretary", branch:"Seremban", clientName:"Farizal & Partners LLP",      companyType:"LLP",    fye:"2023-12-31", assignedTo:"Mei Ling",    assignedId:"s8", manager:"Thamo", stage:"S7",  priority:"Normal", fee:200,  feeStatus:"Invoiced", deadline:"2026-03-12", createdAt:"2026-01-28", secServiceType:"ctc", secSubTasks:["Secretary CTC"], notes:"CTC for bank." },
+];
+const INIT_COMPANIES = [
+  { id:"CMP-001", name:"Syarikat Maju Jaya Sdn Bhd", regNo:"202001012345", type:"Sdn Bhd", fye:"2023-12-31", contactPerson:"Datuk Lim Ah Kow",  contactPhone:"012-3456789", contactEmail:"lim@majujaya.com.my",     assignedStaff:["s1","s3","s7"], departments:["Audit","Tax","Secretary"], branch:"KL",       notes:"Long-standing client since 2015.", createdAt:"2026-01-01" },
+  { id:"CMP-002", name:"Farizal & Partners LLP",     regNo:"LLP0012678",   type:"LLP",    fye:"2023-12-31", contactPerson:"Farizal bin Ahmad",  contactPhone:"013-9876543", contactEmail:"farizal@partners.com.my", assignedStaff:["s2","s8"],       departments:["Audit","Secretary"],       branch:"Seremban", notes:"Annual audit + secretarial retainer.", createdAt:"2026-01-05" },
+  { id:"CMP-003", name:"Kelvin Trading Sdn Bhd",      regNo:"202101056789", type:"Sdn Bhd", fye:"2023-06-30", contactPerson:"Kelvin Wong",        contactPhone:"016-1122334", contactEmail:"kelvin@kelvintrade.com",  assignedStaff:["s5"],            departments:["Accounts"],                branch:"KL",       notes:"Monthly accounts outsourcing.", createdAt:"2026-01-10" },
+  { id:"CMP-004", name:"TechVenture PLT",              regNo:"PLT0023456",   type:"PLT",    fye:"2024-03-31", contactPerson:"Priya a/p Rajan",    contactPhone:"011-5566778", contactEmail:"priya@techventure.my",    assignedStaff:["s6","s7"],       departments:["Audit","Secretary"],       branch:"KL",       notes:"New client FY2024.", createdAt:"2026-02-01" },
+];
+
+function genKPI(staffId, salary) {
+  const monthlyT = salary * KPI_MULT;
+  const d = {};
+  for (let m = 0; m <= CUR_MONTH; m++) {
+    const v = 0.55 + Math.random() * 0.9;
+    const billed = Math.round(monthlyT * v * (0.7 + Math.random() * 0.5));
+    const collected = Math.round(billed * (0.5 + Math.random() * 0.5));
+    d[`${CUR_YEAR}-${m}`] = { billed, collected };
+  }
+  return d;
+}
+const INIT_KPI = {};
+INIT_STAFF.filter(s => s.role === "staff").forEach(s => { INIT_KPI[s.id] = genKPI(s.id, s.salary); });
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function fmt(n) { return "RM " + Number(n||0).toLocaleString("en-MY",{minimumFractionDigits:0,maximumFractionDigits:0}); }
+function nowStr() { return new Date().toLocaleString("en-MY",{year:"numeric",month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:true}); }
+function today() { return new Date().toISOString().split("T")[0]; }
+function daysLeft(d) { return Math.ceil((new Date(d)-new Date(today()))/86400000); }
+function stageName(c,id) { return getStages(c).find(s=>s.id===id)?.label||id; }
+function stageProgress(c,id) { const s=getStages(c); if(!s.length) return 0; const i=s.findIndex(x=>x.id===id); return Math.round(((i+1)/s.length)*100); }
+function initials(n) { return (n||"").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2); }
+function kpiYearTotal(kpiData,uid,yr) { let b=0,c=0; for(let m=0;m<12;m++){const d=kpiData[uid]?.[`${yr}-${m}`]||{billed:0,collected:0};b+=d.billed;c+=d.collected;} return{billed:b,collected:c}; }
+function kpiTarget(salary) { return (salary||0)*KPI_MULT*12; }
+function kpiMonthly(salary) { return (salary||0)*KPI_MULT; }
+function getMilestone(pct) { const r=KPI_MILESTONES.filter(m=>pct>=m.pct); return r.length?r[r.length-1]:null; }
+
+// ─── TAX DEADLINE HELPERS ─────────────────────────────────────────────────────
+// Given a FYE date string (YYYY-MM-DD), returns all critical tax deadlines
+function calcTaxDeadlines(fye) {
+  if (!fye) return null;
+  const d = new Date(fye);
+  if (isNaN(d)) return null;
+  // Finalisation deadline: FYE + 7 months (last day)
+  const finMonth = d.getMonth() + 7; // 0-indexed
+  const finYear  = d.getFullYear() + Math.floor(finMonth / 12);
+  const finMo    = finMonth % 12;
+  // Last day of that month
+  const finDate  = new Date(finYear, finMo + 1, 0);
+  // Submission deadline: FYE + 8 months (last day) — online grace +1 month
+  const subMonth = d.getMonth() + 8;
+  const subYear  = d.getFullYear() + Math.floor(subMonth / 12);
+  const subMo    = subMonth % 12;
+  const subDate  = new Date(subYear, subMo + 1, 0);
+  const fmt2 = dt => dt.toISOString().split('T')[0];
+  return {
+    fye,
+    finalisation: fmt2(finDate),  // Must be finalised by this date (7 months)
+    submission:   fmt2(subDate),  // Must be submitted to TAEF by this date (8 months)
+    // MTRS: 30 days after Form C submission — calculated separately when T8 is done
+  };
+}
+function addDays(dateStr, days) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+function fmtDate(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-MY', { day:'2-digit', month:'short', year:'numeric' });
+}
+function deadlineUrgency(dateStr) {
+  if (!dateStr) return null;
+  const days = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+  if (days < 0)   return { color:'#f87171', label:`OVERDUE ${Math.abs(days)}d`, urgent:true };
+  if (days <= 14) return { color:'#ef4444', label:`${days}d — CRITICAL`,        urgent:true };
+  if (days <= 30) return { color:'#fb923c', label:`${days}d — Urgent`,          urgent:true };
+  if (days <= 60) return { color:'#f59e0b', label:`${days}d — Watch`,           urgent:false };
+  return              { color:'#4ade80', label:`${days}d`,                       urgent:false };
+}
+
+// ─── CIRCULAR PROGRESS ────────────────────────────────────────────────────────
+function CircleProgress({ pct, size=150, color="#a78bfa" }) {
+  const r=(size-18)/2, circ=2*Math.PI*r, filled=Math.min(pct/100,1)*circ;
+  return (
+    <div style={{position:"relative",width:size,height:size,flexShrink:0}}>
+      <svg width={size} height={size} style={{transform:"rotate(-90deg)"}}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#1a2235" strokeWidth={11}/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={11}
+          strokeDasharray={`${filled} ${circ}`} strokeLinecap="round"
+          style={{transition:"stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)",filter:`drop-shadow(0 0 8px ${color}55)`}}/>
+      </svg>
+      <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+        <div style={{fontSize:22,fontWeight:800,color,letterSpacing:"-0.04em",lineHeight:1}}>{Math.round(pct)}%</div>
+        <div style={{fontSize:10,color:"#475569",marginTop:2}}>of KPI</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [staff,       setStaff]       = useState([]);
+  const [cases,       setCases]       = useState([]);
+  const [companies,   setCompanies]   = useState([]);
+  const [auditLog,    setAuditLog]    = useState([]);
+  const [notifs,      setNotifs]      = useState([]);
+  const [kpiData,     setKpiData]     = useState({});
+  const [kpiVisible,  setKpiVisible]  = useState({});  // { [userId]: bool } — per-user toggle
+  const [loaded,      setLoaded]      = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+
+  // UI state
+  const [view,           setView]          = useState("dashboard");
+  const [filterDept,     setFilterDept]    = useState("All");
+  const [filterBranch,   setFilterBranch]  = useState("All");
+  const [search,         setSearch]        = useState("");
+  const [selCase,        setSelCase]       = useState(null);
+  const [activeTab,      setActiveTab]     = useState("details");
+  const [showModal,      setShowModal]     = useState(false);
+  const [editingId,      setEditingId]     = useState(null);
+  const [form,           setForm]          = useState({});
+  const [showNotifPanel, setShowNotifPanel]= useState(false);
+  const [showStaffModal, setShowStaffModal]= useState(false);
+  const [staffForm,      setStaffForm]     = useState({});
+  const [editStaffId,    setEditStaffId]   = useState(null);
+  const [loginForm,      setLoginForm]     = useState({email:"",password:""});
+  const [loginErr,       setLoginErr]      = useState("");
+  const [toast,          setToast]         = useState(null);
+  const [kpiYear,        setKpiYear]       = useState(CUR_YEAR);
+  const [editKpiKey,     setEditKpiKey]    = useState(null);
+  const [kpiEditForm,    setKpiEditForm]   = useState({billed:"",collected:""});
+  const [editSalaryId,   setEditSalaryId]  = useState(null);
+  const [salaryInput,    setSalaryInput]   = useState("");
+  const [motivIdx]                         = useState(Math.floor(Math.random()*MOTIV.length));
+  // Companies UI
+  const [selCompany,     setSelCompany]    = useState(null);
+  const [showCoModal,    setShowCoModal]   = useState(false);
+  const [editingCoId,    setEditingCoId]   = useState(null);
+  const [coForm,         setCoForm]        = useState({});
+  const [coSearch,       setCoSearch]      = useState("");
+
+  // ── LOAD ──
+  useEffect(()=>{
+    async function load(){
+      try {
+        const [sc,sl,sn,ss,sk,sco,skv]=await Promise.allSettled([
+          window.storage.get("smv6_cases"), window.storage.get("smv6_audit"),
+          window.storage.get("smv6_notifs"),window.storage.get("smv6_staff"),
+          window.storage.get("smv6_kpi"),   window.storage.get("smv6_companies"),
+          window.storage.get("smv6_kpiviz"),
+        ]);
+        setCases(sc.status==="fulfilled"&&sc.value?JSON.parse(sc.value.value):INIT_CASES);
+        setAuditLog(sl.status==="fulfilled"&&sl.value?JSON.parse(sl.value.value):[]);
+        setNotifs(sn.status==="fulfilled"&&sn.value?JSON.parse(sn.value.value):[]);
+        setStaff(ss.status==="fulfilled"&&ss.value?JSON.parse(ss.value.value):INIT_STAFF);
+        setKpiData(sk.status==="fulfilled"&&sk.value?JSON.parse(sk.value.value):INIT_KPI);
+        setCompanies(sco.status==="fulfilled"&&sco.value?JSON.parse(sco.value.value):INIT_COMPANIES);
+        setKpiVisible(skv.status==="fulfilled"&&skv.value?JSON.parse(skv.value.value):{});
+      } catch { setCases(INIT_CASES); setStaff(INIT_STAFF); setKpiData(INIT_KPI); setCompanies(INIT_COMPANIES); }
+      setLoaded(true);
+    }
+    load();
+  },[]);
+
+  useEffect(()=>{if(loaded){window.storage.set("smv6_cases",    JSON.stringify(cases));}},     [cases,loaded]);
+  useEffect(()=>{if(loaded){window.storage.set("smv6_audit",    JSON.stringify(auditLog));}},  [auditLog,loaded]);
+  useEffect(()=>{if(loaded){window.storage.set("smv6_notifs",   JSON.stringify(notifs));}},    [notifs,loaded]);
+  useEffect(()=>{if(loaded){window.storage.set("smv6_staff",    JSON.stringify(staff));}},     [staff,loaded]);
+  useEffect(()=>{if(loaded){window.storage.set("smv6_kpi",      JSON.stringify(kpiData));}},   [kpiData,loaded]);
+  useEffect(()=>{if(loaded){window.storage.set("smv6_companies",JSON.stringify(companies));}}, [companies,loaded]);
+  useEffect(()=>{if(loaded){window.storage.set("smv6_kpiviz",   JSON.stringify(kpiVisible));}},[kpiVisible,loaded]);
+
+  function showToast(msg,type="ok"){setToast({msg,type});setTimeout(()=>setToast(null),3500);}
+
+  // ── KPI VISIBILITY TOGGLE ──
+  function myKpiVisible() {
+    if(currentUser===null) return false;
+    return kpiVisible[currentUser.id] !== false; // default ON
+  }
+  function toggleKpiVisible() {
+    setKpiVisible(p=>({...p,[currentUser.id]: p[currentUser.id]===false ? true : false}));
+  }
+
+  // ── COMPANY HELPERS ──
+  function getCompanyOwing(companyName) {
+    return cases
+      .filter(c=>c.clientName===companyName && (c.feeStatus==="Pending"||c.feeStatus==="Invoiced"))
+      .reduce((a,c)=>a+Number(c.fee||0),0);
+  }
+  function getCompanyTotal(companyName) {
+    return cases.filter(c=>c.clientName===companyName).reduce((a,c)=>a+Number(c.fee||0),0);
+  }
+  function getCompanyCases(companyName) {
+    return cases.filter(c=>c.clientName===companyName);
+  }
+  function openAddCompany(){
+    setEditingCoId(null);
+    setCoForm({name:"",regNo:"",type:"Sdn Bhd",fye:"",contactPerson:"",contactPhone:"",contactEmail:"",assignedStaff:[],departments:[],branch:"KL",notes:""});
+    setShowCoModal(true);
+  }
+  function openEditCompany(co){
+    setEditingCoId(co.id);
+    setCoForm({...co,assignedStaff:co.assignedStaff||[],departments:co.departments||[]});
+    setShowCoModal(true);
+  }
+  function saveCompany(){
+    if(!coForm.name){showToast("Company name required.","err");return;}
+    if(editingCoId){
+      setCompanies(p=>p.map(co=>co.id===editingCoId?{...coForm,id:editingCoId}:co));
+      addAudit(null,"COMPANY_UPDATED",`Updated: ${coForm.name}`,currentUser);
+      showToast("Company updated.");
+    } else {
+      const id="CMP-"+String(companies.length+1).padStart(3,"0");
+      setCompanies(p=>[...p,{...coForm,id,createdAt:today()}]);
+      addAudit(null,"COMPANY_ADDED",`Added: ${coForm.name}`,currentUser);
+      showToast("Company added.");
+    }
+    setShowCoModal(false);
+  }
+  function deleteCompany(id){
+    const co=companies.find(x=>x.id===id);
+    if(!window.confirm(`Delete ${co?.name}? This cannot be undone.`))return;
+    setCompanies(p=>p.filter(x=>x.id!==id));
+    addAudit(null,"COMPANY_DELETED",`Deleted: ${co?.name}`,currentUser);
+    setSelCompany(null);
+    showToast("Company deleted.","err");
+  }
+
+  // ── AUTH ──
+  function handleLogin(){
+    const u=staff.find(s=>s.email.toLowerCase()===loginForm.email.toLowerCase()&&s.password===loginForm.password);
+    if(!u){setLoginErr("Invalid email or password.");return;}
+    setCurrentUser(u);setLoginErr("");addAudit(null,"LOGIN",`${u.name} logged in`,u);
+  }
+  function handleLogout(){addAudit(null,"LOGOUT",`${currentUser.name} logged out`,currentUser);setCurrentUser(null);setSelCase(null);setView("dashboard");}
+
+  // ── AUDIT LOG ──
+  function addAudit(caseId,action,detail,user){
+    const e={id:Date.now()+Math.random(),timestamp:nowStr(),ts:Date.now(),caseId:caseId||null,action,detail,userId:user?.id||"system",userName:user?.name||"System",userRole:user?.role||"",userDept:user?.department||""};
+    setAuditLog(p=>[e,...p]);
+  }
+
+  // ── NOTIFICATIONS ──
+  function pushNotifs(caseObj,action,detail,by){
+    const newN=[]; const ts=Date.now();
+    const push=(u)=>{if(!u||u.id===by?.id||newN.find(n=>n.toId===u.id))return;newN.push({id:ts+Math.random(),ts,timestamp:nowStr(),toId:u.id,toName:u.name,toEmail:u.email,caseId:caseObj.id,clientName:caseObj.clientName,department:caseObj.department,action,detail,read:false,emailSent:true});};
+    staff.filter(s=>s.role==="manager"||s.role==="admin").forEach(push);
+    push(staff.find(s=>s.id===caseObj.assignedId));
+    const stg=getStages(caseObj).find(s=>s.id===caseObj.stage);
+    if(stg?.crossDept) staff.filter(s=>s.department===stg.crossDept).forEach(push);
+    if(caseObj.department==="Audit"&&["A3","A4"].includes(caseObj.stage)) staff.filter(s=>s.department==="Tax").forEach(push);
+    if(caseObj.department==="Audit"&&caseObj.stage==="A8") staff.filter(s=>s.department==="Secretary").forEach(push);
+    if(caseObj.department==="Accounts"&&caseObj.stage==="AC10") staff.filter(s=>s.department==="Audit").forEach(push);
+    if(caseObj.department==="Secretary"&&caseObj.stage==="MB1") staff.filter(s=>s.department==="Audit").forEach(push);
+    setNotifs(p=>[...newN,...p]);
+  }
+
+  const myNotifs = currentUser?notifs.filter(n=>n.toId===currentUser.id):[];
+  const unread   = myNotifs.filter(n=>!n.read).length;
+  function markRead(id){setNotifs(p=>p.map(n=>n.id===id?{...n,read:true}:n));}
+  function markAllRead(){setNotifs(p=>p.map(n=>n.toId===currentUser?.id?{...n,read:true}:n));}
+
+  // ── CASES ──
+  function openAdd(){
+    setEditingId(null);
+    setForm({entity:"SM Associates PLT",department:"Audit",branch:currentUser?.branch||"KL",clientName:"",companyType:"Sdn Bhd",fye:"",assignedTo:"",assignedId:"",manager:"Thamo",stage:"A1",priority:"Normal",fee:"",feeStatus:"Pending",deadline:"",notes:"",linkedTax:false,secServiceType:"retainer",secSubTasks:[]});
+    setShowModal(true);
+  }
+  function openEdit(c){setEditingId(c.id);setForm({...c,secSubTasks:c.secSubTasks||[]});setShowModal(true);setSelCase(null);}
+
+  function handleDeptChange(dept){
+    const first=dept==="Secretary"?SEC_BASE_STAGES[0].id:STAGES_MAP[dept]?.[0]?.id||"";
+    setForm(p=>({...p,department:dept,stage:first,entity:dept==="Audit"?"SM Associates PLT":dept==="Tax"?"SM Tax Services Sdn Bhd":"SM Corporate House Sdn Bhd"}));
+  }
+  function handleSecSvcChange(svc){
+    const first=(svc==="mbrs"||svc==="annual_ret")?SEC_MBRS_STAGES[0].id:SEC_BASE_STAGES[0].id;
+    setForm(p=>({...p,secServiceType:svc,stage:first,secSubTasks:[]}));
+  }
+
+  function saveCase(){
+    if(!form.clientName||!form.assignedTo||!form.deadline){showToast("Fill in required fields.","err");return;}
+    if(editingId){
+      const old=cases.find(c=>c.id===editingId);
+      const taxDL2 = (form.department==="Tax"||form.department==="Audit") ? calcTaxDeadlines(form.fye) : null;
+      const upd={...form,id:editingId,
+        taxFinalisationDeadline: taxDL2?.finalisation || old.taxFinalisationDeadline || null,
+        taxSubmissionDeadline:   taxDL2?.submission   || old.taxSubmissionDeadline   || null,
+        mtrsDeadline:            old.mtrsDeadline||null,
+        t8DoneDate:              old.t8DoneDate||null,
+      };
+      setCases(p=>p.map(c=>c.id===editingId?upd:c));
+      if(selCase?.id===editingId)setSelCase(upd);
+      const ch=[];
+      if(old.stage!==form.stage)ch.push(`Stage: "${stageName(old,old.stage)}"→"${stageName(form,form.stage)}"`);
+      if(old.assignedTo!==form.assignedTo)ch.push(`Assigned: ${old.assignedTo}→${form.assignedTo}`);
+      if(old.priority!==form.priority)ch.push(`Priority: ${old.priority}→${form.priority}`);
+      if(old.feeStatus!==form.feeStatus)ch.push(`Fee: ${old.feeStatus}→${form.feeStatus}`);
+      if(old.deadline!==form.deadline)ch.push(`Deadline: ${old.deadline}→${form.deadline}`);
+      const det=ch.length?ch.join(" | "):"Case details updated";
+      addAudit(editingId,"CASE_UPDATED",det,currentUser);pushNotifs(upd,"CASE_UPDATED",det,currentUser);
+      showToast("Case updated.");
+    } else {
+      const pre=form.department==="Audit"?"AUD":form.department==="Accounts"?"ACC":form.department==="Tax"?"TAX":"SEC";
+      const id=`${pre}-${new Date().getFullYear()}-${String(cases.filter(c=>c.department===form.department).length+1).padStart(3,"0")}`;
+      const taxDL = (form.department==="Tax"||form.department==="Audit") ? calcTaxDeadlines(form.fye) : null;
+      const nc={...form,id,createdAt:today(),
+        taxFinalisationDeadline: taxDL?.finalisation||null,
+        taxSubmissionDeadline:   taxDL?.submission||null,
+        mtrsDeadline:            null,  // set when T8 is advanced
+        t8DoneDate:              null,
+      };
+      setCases(p=>[nc,...p]);
+      addAudit(id,"CASE_CREATED",`New ${form.department} case: ${form.clientName} → ${form.assignedTo}`,currentUser);
+      pushNotifs(nc,"CASE_ASSIGNED",`New case assigned: ${form.clientName}`,currentUser);
+      showToast("Case added.");
+    }
+    setShowModal(false);
+  }
+
+  function advanceStage(c){
+    const stages=getStages(c);
+    const idx=stages.findIndex(s=>s.id===c.stage);
+    if(idx>=stages.length-1)return;
+    const next=stages[idx+1];
+    let upd={...c,stage:next.id};
+
+    // ── Tax T8 completed → auto-set MTRS deadline (T8 date + 30 days) ──
+    if(c.department==="Tax" && c.stage==="T8"){
+      const t8Date = today();
+      const mtrs   = addDays(t8Date, 30);
+      upd = {...upd, t8DoneDate:t8Date, mtrsDeadline:mtrs};
+      // Notify all staff about MTRS deadline
+      const ts=Date.now();
+      const mtrsNotif = staff
+        .filter(s=>s.department==="Tax"||s.department==="Secretary"||s.role==="admin"||s.role==="manager")
+        .map(s=>({id:ts+Math.random(),ts,timestamp:nowStr(),toId:s.id,toName:s.name,toEmail:s.email,
+          caseId:c.id,clientName:c.clientName,department:"Tax",
+          action:"MTRS_DEADLINE_SET",
+          detail:`MTRS deadline set: ${fmtDate(mtrs)} (30 days from Form C submission) — ${c.clientName}`,
+          read:false,emailSent:true,urgent:true}));
+      setNotifs(p=>[...mtrsNotif,...p]);
+      addAudit(c.id,"MTRS_DEADLINE_SET",`MTRS deadline auto-set to ${mtrs} for ${c.clientName}`,currentUser);
+    }
+
+    // ── When Tax case created/FYE set, notify Audit staff of tax deadlines ──
+    if(c.department==="Tax" && next.id==="T1" && c.taxSubmissionDeadline){
+      const ts=Date.now();
+      const urg=deadlineUrgency(c.taxSubmissionDeadline);
+      const auditNotifs = staff
+        .filter(s=>s.department==="Audit"||s.role==="admin"||s.role==="manager")
+        .map(s=>({id:ts+Math.random(),ts,timestamp:nowStr(),toId:s.id,toName:s.name,toEmail:s.email,
+          caseId:c.id,clientName:c.clientName,department:"Tax",
+          action:"TAX_DEADLINE_ALERT",
+          detail:`Tax deadline alert — ${c.clientName}: Finalise by ${fmtDate(c.taxFinalisationDeadline)}, Submit by ${fmtDate(c.taxSubmissionDeadline)}`,
+          read:false,emailSent:true,urgent:urg?.urgent||false}));
+      setNotifs(p=>[...auditNotifs,...p]);
+    }
+
+    setCases(p=>p.map(x=>x.id===c.id?upd:x));
+    setSelCase(upd);
+    const det=`Stage: "${stages[idx].label}"→"${next.label}"`;
+    addAudit(c.id,"STAGE_ADVANCED",det,currentUser);pushNotifs(upd,"STAGE_CHANGED",det,currentUser);
+    showToast(`Advanced: ${next.label}`);
+  }
+
+  function deleteCase(id){
+    const c=cases.find(x=>x.id===id);
+    addAudit(id,"CASE_DELETED",`Deleted: ${c?.clientName}`,currentUser);
+    setCases(p=>p.filter(x=>x.id!==id));setSelCase(null);showToast("Deleted.","err");
+  }
+
+  // ── STAFF ──
+  function saveStaff(){
+    if(!staffForm.name||!staffForm.email||!staffForm.password){showToast("Fill all fields.","err");return;}
+    if(editStaffId){
+      setStaff(p=>p.map(s=>s.id===editStaffId?{...staffForm,id:editStaffId}:s));
+      addAudit(null,"STAFF_UPDATED",`Updated: ${staffForm.name}`,currentUser);showToast("Updated.");
+    } else {
+      const id="s"+Date.now();setStaff(p=>[...p,{...staffForm,id}]);
+      addAudit(null,"STAFF_ADDED",`Added: ${staffForm.name}`,currentUser);showToast("Staff added.");
+    }
+    setShowStaffModal(false);
+  }
+
+  // ── KPI HELPERS ──
+  function getMonthKpi(uid,yr,m){return kpiData[uid]?.[`${yr}-${m}`]||{billed:0,collected:0};}
+  function saveKpiEntry(uid,yr,m,b,c){
+    setKpiData(p=>({...p,[uid]:{...(p[uid]||{}),[`${yr}-${m}`]:{billed:Number(b),collected:Number(c)}}}));
+    setEditKpiKey(null);showToast("KPI entry saved.");
+  }
+  function getProjection(uid,salary,yr){
+    const elapsed=yr===CUR_YEAR?CUR_MONTH+1:12;if(!elapsed)return null;
+    const{billed,collected}=kpiYearTotal(kpiData,uid,yr);
+    const avg=(billed+collected)/2/elapsed;const tgt=kpiTarget(salary);
+    if(avg<=0)return null;
+    const mo=Math.ceil(tgt/avg);return{avg,mo,onTrack:mo<=12};
+  }
+  function getLeaderboard(yr){
+    return staff.filter(s=>s.role==="staff"&&s.salary)
+      .map(s=>{const{billed,collected}=kpiYearTotal(kpiData,s.id,yr);const tgt=kpiTarget(s.salary);const score=(billed+collected)/2;return{id:s.id,dept:s.department,branch:s.branch,pct:tgt>0?(score/tgt)*100:0,score,tgt,isMe:s.id===currentUser?.id};})
+      .sort((a,b)=>b.pct-a.pct);
+  }
+
+  // ── COMPUTED ──
+  const isAdmin   = currentUser?.role==="admin";
+  const isManager = currentUser?.role==="manager";
+  const isStaff   = currentUser?.role==="staff";
+  const canManage = isAdmin||isManager;
+
+  const filtered = cases.filter(c=>{
+    if(isStaff&&c.assignedId!==currentUser.id&&c.department!==currentUser.department)return false;
+    if(filterDept!=="All"&&c.department!==filterDept)return false;
+    if(filterBranch!=="All"&&c.branch!==filterBranch)return false;
+    if(search){const q=search.toLowerCase();if(!c.clientName.toLowerCase().includes(q)&&!c.id.toLowerCase().includes(q)&&!c.assignedTo.toLowerCase().includes(q))return false;}
+    return true;
+  });
+
+  const stats={
+    total:cases.length,
+    overdue:cases.filter(c=>daysLeft(c.deadline)<0).length,
+    byDept:DEPARTMENTS.reduce((a,d)=>({...a,[d]:cases.filter(c=>c.department===d).length}),{}),
+    feePending:cases.filter(c=>c.feeStatus==="Pending").reduce((a,c)=>a+Number(c.fee||0),0),
+    feeReceived:cases.filter(c=>c.feeStatus==="Received").reduce((a,c)=>a+Number(c.fee||0),0),
+  };
+
+  // My KPI vars
+  const mySalary  = currentUser?.salary||0;
+  const myTgt     = kpiTarget(mySalary);
+  const myMonTgt  = kpiMonthly(mySalary);
+  const myYrData  = currentUser?kpiYearTotal(kpiData,currentUser.id,kpiYear):{billed:0,collected:0};
+  const myScore   = (myYrData.billed+myYrData.collected)/2;
+  const myPct     = myTgt>0?(myScore/myTgt)*100:0;
+  const myBoard   = currentUser?getLeaderboard(kpiYear):[];
+  const myRank    = myBoard.findIndex(l=>l.isMe)+1;
+  const myMS      = getMilestone(myPct);
+  const myProj    = currentUser?getProjection(currentUser.id,mySalary,kpiYear):null;
+
+  // ─── LOGIN SCREEN ─────────────────────────────────────────────────────────
+  if(!currentUser) return (
+    <div style={{fontFamily:"'DM Sans','Segoe UI',sans-serif",background:"#060912",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#e2e8f0"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+      <style>{`*{box-sizing:border-box}.li{background:#0d1525;border:1px solid #1e293b;color:#e2e8f0;padding:11px 14px;border-radius:9px;font-size:14px;width:100%;font-family:inherit;outline:none;transition:border-color 0.2s}.li:focus{border-color:#6366f1}.lbp{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border:none;padding:13px;border-radius:9px;font-size:14px;font-weight:700;cursor:pointer;width:100%;font-family:inherit}.lbp:hover{opacity:0.9}`}</style>
+      <div style={{width:440}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{width:60,height:60,background:"linear-gradient(135deg,#6366f1,#f59e0b)",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,fontWeight:900,color:"white",margin:"0 auto 16px"}}>S</div>
+          <div style={{fontSize:26,fontWeight:900,letterSpacing:"-0.05em",color:"#f1f5f9"}}>SM Group</div>
+          <div style={{fontSize:12,color:"#334155",marginTop:4,fontFamily:"DM Mono,monospace"}}>Workflow · KPI · Management System</div>
+        </div>
+        <div style={{background:"#0a0e18",border:"1px solid #1a2235",borderRadius:16,padding:32}}>
+          <div style={{marginBottom:16}}><label style={{fontSize:11,color:"#475569",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",display:"block",marginBottom:6}}>Email</label><input className="li" type="email" value={loginForm.email} onChange={e=>setLoginForm(p=>({...p,email:e.target.value}))} placeholder="your@smgroup.my" onKeyDown={e=>e.key==="Enter"&&handleLogin()}/></div>
+          <div style={{marginBottom:20}}><label style={{fontSize:11,color:"#475569",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",display:"block",marginBottom:6}}>Password</label><input className="li" type="password" value={loginForm.password} onChange={e=>setLoginForm(p=>({...p,password:e.target.value}))} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&handleLogin()}/></div>
+          {loginErr&&<div style={{background:"#2d0a0a",border:"1px solid #7f1d1d",borderRadius:7,padding:"8px 12px",fontSize:12,color:"#fca5a5",marginBottom:14}}>{loginErr}</div>}
+          <button className="lbp" onClick={handleLogin}>Sign In →</button>
+          <div style={{marginTop:14,padding:14,background:"#060912",borderRadius:8,fontSize:11,color:"#334155"}}>
+            <div style={{fontWeight:700,color:"#475569",marginBottom:5,fontFamily:"DM Mono,monospace"}}>Accounts</div>
+            <div>Admin (Nesan): nesan@smgroup.my / admin888</div>
+            <div style={{marginTop:2}}>Manager (Thamo): thamo@smgroup.my / manager123</div>
+            <div style={{marginTop:2}}>Staff: razif@smgroup.my / staff123</div>
+            <div style={{marginTop:2}}>Secretary: laila@smgroup.my / staff123</div>
+          </div>
+          <button onClick={async()=>{
+            try{await Promise.all(["smv4_cases","smv4_audit","smv4_notifs","smv4_staff","smv4_kpi","smv5_cases","smv5_audit","smv5_notifs","smv5_staff","smv5_kpi","smv6_cases","smv6_audit","smv6_notifs","smv6_staff","smv6_kpi","smv6_companies","smv6_kpiviz"].map(k=>window.storage.delete(k)));}catch{}
+            setCases(INIT_CASES);setAuditLog([]);setNotifs([]);setStaff(INIT_STAFF);setKpiData(INIT_KPI);
+            setLoginErr("✓ Data reset. You can now log in.");
+          }} style={{marginTop:10,width:"100%",background:"none",border:"1px solid #1e293b",borderRadius:8,color:"#334155",fontSize:11,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>
+            ↺ Having trouble logging in? Reset app data
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ─── MAIN SHELL ────────────────────────────────────────────────────────────
+  const NAV_ITEMS = [
+    {id:"dashboard", label:"⬡ Dash"},
+    {id:"cases",     label:"⊞ Cases"},
+    {id:"pipeline",  label:"⟳ Pipeline"},
+    {id:"secretary", label:"📜 Secretary", hidden: isStaff && currentUser?.department!=="Secretary"},
+    {id:"companies", label:"🏢 Companies"},
+    {id:"kpi",       label:"🎯 My KPI",    hidden: isManager},
+    ...(isAdmin||isManager?[{id:"audit-trail",label:"🔒 Trail"}]:[]),
+    ...(isAdmin||isManager?[{id:"report",    label:"↗ Report"}]:[]),
+    ...(isAdmin||isManager?[{id:"staff",     label:"👥 Staff"}]:[]),
+  ].filter(n=>!n.hidden);
+
+  return (
+    <div style={{fontFamily:"'DM Sans','Segoe UI',sans-serif",background:"#060912",minHeight:"100vh",color:"#e2e8f0"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+      <style>{`
+        *{box-sizing:border-box}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes slideR{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes slideD{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+        @keyframes countUp{from{opacity:0;transform:scale(0.85)}to{opacity:1;transform:scale(1)}}
+        ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:#0a0e18}::-webkit-scrollbar-thumb{background:#1e293b;border-radius:3px}
+        .row:hover{background:#0d1525!important;cursor:pointer}
+        .inp{background:#0d1525;border:1px solid #1e293b;color:#e2e8f0;padding:9px 12px;border-radius:8px;font-size:13px;width:100%;font-family:inherit;outline:none;transition:border-color 0.2s}
+        .inp:focus{border-color:#6366f1}
+        select.inp option{background:#0d1525}
+        label{font-size:11px;color:#475569;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;display:block;margin-bottom:5px}
+        .btn{border:none;border-radius:8px;font-family:inherit;font-weight:600;cursor:pointer;transition:all 0.15s;font-size:13px}
+        .bp{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;padding:9px 18px}
+        .bp:hover{opacity:0.9;transform:translateY(-1px)}
+        .bg{background:transparent;color:#64748b;border:1px solid #1e293b;padding:7px 14px}
+        .bg:hover{background:#0f172a;color:#e2e8f0;border-color:#334155}
+        .bsm{padding:6px 12px;font-size:12px}
+        .nav{background:none;border:none;color:#475569;font-size:12px;font-weight:600;padding:6px 11px;border-radius:7px;cursor:pointer;font-family:inherit;transition:all 0.2s}
+        .nav.on{background:#0f1e35;color:#e2e8f0}
+        .nav:hover{color:#e2e8f0}
+        .tab{background:none;border:none;font-family:inherit;font-size:11px;font-weight:600;color:#475569;padding:5px 10px;border-radius:6px;cursor:pointer;transition:all 0.2s}
+        .tab.on{background:#0f1e35;color:#e2e8f0}
+        .card{background:#0d1117;border:1px solid #1a2235;border-radius:14px}
+        .tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:0.02em}
+        .ntrow:hover{background:#0f172a;cursor:pointer}
+        .kpi-glow{box-shadow:0 0 30px #7c3aed22}
+      `}</style>
+
+      {toast&&<div style={{position:"fixed",top:20,right:20,zIndex:9999,padding:"11px 18px",borderRadius:10,background:toast.type==="err"?"#2d0a0a":"#071a10",border:`1px solid ${toast.type==="err"?"#ef4444":"#22c55e"}`,color:toast.type==="err"?"#fca5a5":"#86efac",fontSize:13,fontWeight:600,boxShadow:"0 8px 40px #00000088",animation:"slideR 0.3s ease"}}>{toast.msg}</div>}
+
+      {/* HEADER */}
+      <div style={{background:"#0a0e18",borderBottom:"1px solid #111827",padding:"0 18px",display:"flex",alignItems:"center",justifyContent:"space-between",height:54,position:"sticky",top:0,zIndex:200}}>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:28,height:28,background:"linear-gradient(135deg,#6366f1,#f59e0b)",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,color:"white"}}>S</div>
+            <div><div style={{fontSize:13,fontWeight:800,letterSpacing:"-0.03em",color:"#f1f5f9",lineHeight:1}}>SM Group</div><div style={{fontSize:9,color:"#334155",fontFamily:"DM Mono,monospace"}}>KL · Seremban</div></div>
+          </div>
+          <div style={{display:"flex",gap:1,flexWrap:"wrap"}}>
+            {NAV_ITEMS.map(n=>(
+              <button key={n.id} className={`nav${view===n.id?" on":""}`} onClick={()=>setView(n.id)}
+                style={n.id==="kpi"&&view==="kpi"?{background:"#13001f",color:"#a78bfa",border:"1px solid #2d1f4e"}:{}}>
+                {n.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {stats.overdue>0&&<div style={{fontSize:11,fontWeight:700,padding:"3px 9px",borderRadius:20,background:"#2d0a0a",color:"#f87171",border:"1px solid #7f1d1d"}}>⚠ {stats.overdue}</div>}
+          {canManage&&<button className="btn bp bsm" onClick={openAdd}>+ New Case</button>}
+          {/* Bell */}
+          <div style={{position:"relative"}}>
+            <button onClick={()=>setShowNotifPanel(p=>!p)} style={{background:"#0d1525",border:"1px solid #1e293b",borderRadius:8,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,position:"relative"}}>
+              🔔{unread>0&&<div style={{position:"absolute",top:4,right:4,width:7,height:7,background:"#ef4444",borderRadius:"50%",animation:"pulse 2s infinite"}}/>}
+            </button>
+            {showNotifPanel&&(
+              <div style={{position:"absolute",right:0,top:42,width:340,background:"#0d1117",border:"1px solid #1e293b",borderRadius:12,boxShadow:"0 20px 60px #00000099",zIndex:500,animation:"slideD 0.2s ease"}}>
+                <div style={{padding:"11px 16px",borderBottom:"1px solid #1a2235",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:13,fontWeight:700}}>Notifications{unread>0&&<span style={{background:"#ef4444",color:"white",borderRadius:10,fontSize:10,padding:"1px 6px",marginLeft:6}}>{unread}</span>}</span>
+                  {unread>0&&<button onClick={markAllRead} style={{background:"none",border:"none",color:"#6366f1",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Mark all read</button>}
+                </div>
+                <div style={{maxHeight:310,overflowY:"auto"}}>
+                  {myNotifs.length===0?<div style={{padding:"20px",textAlign:"center",color:"#334155",fontSize:13}}>No notifications.</div>:
+                    myNotifs.slice(0,20).map(n=>(
+                      <div key={n.id} className="ntrow" onClick={()=>markRead(n.id)} style={{padding:"10px 16px",borderBottom:"1px solid #0a0e18",display:"flex",gap:9,background:n.read?"transparent":n.urgent?"#1a0800":"#0a1628",borderLeft:n.urgent&&!n.read?`2px solid #ef4444`:"none"}}>
+                        <div style={{width:7,height:7,borderRadius:"50%",background:n.read?"#1e293b":n.urgent?"#ef4444":"#6366f1",flexShrink:0,marginTop:5}}/>
+                        <div style={{flex:1}}>
+                          {n.urgent&&!n.read&&<div style={{fontSize:9,color:"#ef4444",fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:2}}>⚠ URGENT</div>}
+                          <div style={{fontSize:12,fontWeight:n.read?400:600,color:n.read?"#64748b":n.urgent?"#fca5a5":"#e2e8f0"}}>{n.detail}</div>
+                          <div style={{fontSize:10,color:"#334155",marginTop:1}}>{n.clientName} · {n.timestamp}</div>
+                          {n.emailSent&&<div style={{fontSize:10,color:"#4ade8077",marginTop:1}}>✉ {n.toEmail}</div>}
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            )}
+          </div>
+          {/* User chip */}
+          <div style={{display:"flex",alignItems:"center",gap:7,background:"#0d1525",border:"1px solid #1e293b",borderRadius:8,padding:"4px 9px"}}>
+            <div style={{width:24,height:24,borderRadius:"50%",background:`linear-gradient(135deg,${isAdmin?"#f59e0b":isManager?"#6366f1":"#7c3aed"},${isAdmin?"#ef4444":isManager?"#8b5cf6":"#a78bfa"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"white"}}>{initials(currentUser.name)}</div>
+            <div><div style={{fontSize:12,fontWeight:700,color:"#e2e8f0",lineHeight:1}}>{currentUser.name}</div><div style={{fontSize:10,color:"#334155",textTransform:"capitalize"}}>{currentUser.role}</div></div>
+            <button onClick={handleLogout} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12,marginLeft:3}} title="Logout">⎋</button>
+          </div>
+        </div>
+      </div>
+      {showNotifPanel&&<div style={{position:"fixed",inset:0,zIndex:199}} onClick={()=>setShowNotifPanel(false)}/>}
+
+      <div style={{padding:"20px",maxWidth:1400,margin:"0 auto"}}>
+
+        {/* ══════════════════ DASHBOARD ══════════════════ */}
+        {view==="dashboard"&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:18}}>
+              <h1 style={{margin:0,fontSize:22,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>{canManage?"Operations Overview":`Dashboard — ${currentUser.name}`}</h1>
+              <p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>{new Date().toLocaleDateString("en-MY",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10,marginBottom:18}}>
+              {[{l:"Total",v:stats.total,c:"#6366f1",i:"⊞"},{l:"Audit",v:stats.byDept.Audit,c:DEPT_COLORS.Audit.accent,i:"⚖"},{l:"Accounts",v:stats.byDept.Accounts,c:DEPT_COLORS.Accounts.accent,i:"📊"},{l:"Tax",v:stats.byDept.Tax,c:DEPT_COLORS.Tax.accent,i:"🧾"},{l:"Secretary",v:stats.byDept.Secretary,c:DEPT_COLORS.Secretary.accent,i:"📜"},{l:"Overdue",v:stats.overdue,c:"#f87171",i:"⚠"}].map(k=>(
+                <div key={k.l} className="card" style={{padding:"13px 15px"}}>
+                  <div style={{fontSize:16,marginBottom:4}}>{k.i}</div>
+                  <div style={{fontSize:24,fontWeight:800,color:k.c,lineHeight:1,letterSpacing:"-0.04em"}}>{k.v}</div>
+                  <div style={{fontSize:11,color:"#334155",marginTop:3,fontWeight:600}}>{k.l}</div>
+                </div>
+              ))}
+            </div>
+            {/* KPI teaser for staff */}
+            {isStaff&&(
+              <div style={{background:"linear-gradient(135deg,#0f0a1f,#1a0a2e)",border:"1px solid #2d1f4e",borderRadius:14,padding:"16px 20px",marginBottom:16}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:myKpiVisible()?10:0}}>
+                  <div style={{cursor:"pointer",flex:1}} onClick={()=>setView("kpi")}>
+                    <div style={{fontSize:11,color:"#7c3aed",fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:4}}>🎯 Your KPI — {CUR_YEAR}</div>
+                    {myKpiVisible()
+                      ? <><div style={{fontSize:18,fontWeight:800,color:"#f1f5f9",letterSpacing:"-0.03em"}}>{fmt(myScore)} <span style={{fontSize:13,color:"#475569",fontWeight:400}}>/ {fmt(myTgt)}</span></div>
+                          <div style={{fontSize:12,color:myPct>=100?"#a78bfa":myPct>=75?"#f59e0b":"#64748b",marginTop:2}}>{myMS?`${myMS.icon} ${myMS.msg}`:`${Math.round(myPct)}% of annual target`}</div></>
+                      : <div style={{fontSize:13,color:"#334155",fontStyle:"italic"}}>KPI figures hidden — tap 👁 to show</div>
+                    }
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    {myKpiVisible()&&<CircleProgress pct={myPct} size={80} color={myPct>=100?"#a78bfa":myPct>=75?"#f59e0b":"#38bdf8"}/>}
+                    <button onClick={toggleKpiVisible} title={myKpiVisible()?"Hide KPI figures":"Show KPI figures"}
+                      style={{background:"#1a0a2e",border:"1px solid #2d1f4e",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      {myKpiVisible()?"👁":"🙈"}
+                    </button>
+                  </div>
+                </div>
+                {myKpiVisible()&&<div style={{background:"#1a0a2e",borderRadius:4,height:6,cursor:"pointer"}} onClick={()=>setView("kpi")}>
+                  <div style={{width:`${Math.min(myPct,100)}%`,height:6,borderRadius:4,background:"linear-gradient(90deg,#7c3aed,#a78bfa)",transition:"width 1s ease"}}/>
+                </div>}
+              </div>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+              <div className="card">
+                <div style={{padding:"12px 16px",borderBottom:"1px solid #1a2235",fontSize:13,fontWeight:700}}>📋 Recent Cases</div>
+                <div style={{padding:"8px 12px"}}>
+                  {(canManage?cases:cases.filter(c=>c.assignedId===currentUser.id||c.department===currentUser.department)).slice(0,7).map(c=>{
+                    const dc2=DEPT_COLORS[c.department],days=daysLeft(c.deadline);
+                    return <div key={c.id} className="row" style={{padding:"8px",borderRadius:7,display:"flex",gap:9,alignItems:"center",marginBottom:3}} onClick={()=>{setSelCase(c);setView("cases");}}>
+                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:700,color:"#cbd5e1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.clientName}</div><div style={{fontSize:10,color:"#334155"}}>{c.department} · {stageName(c,c.stage)}</div></div>
+                      <div style={{fontSize:10,color:days<0?"#f87171":days<=3?"#fb923c":"#475569",whiteSpace:"nowrap",fontWeight:days<0?700:400}}>{days<0?`${Math.abs(days)}d late`:days===0?"Today":`${days}d`}</div>
+                      <div className="tag" style={{background:dc2.light,color:dc2.accent,border:`1px solid ${dc2.border}`}}>{c.department.slice(0,3)}</div>
+                    </div>;
+                  })}
+                </div>
+              </div>
+              <div className="card">
+                <div style={{padding:"12px 16px",borderBottom:"1px solid #1a2235",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:13,fontWeight:700}}>🔔 Notifications</span>
+                  {unread>0&&<span style={{fontSize:11,color:"#6366f1",fontWeight:700}}>{unread} unread</span>}
+                </div>
+                <div style={{padding:"8px 12px"}}>
+                  {myNotifs.length===0?<div style={{color:"#334155",fontSize:12,padding:"10px 0"}}>No notifications.</div>:
+                    myNotifs.slice(0,6).map(n=>(
+                      <div key={n.id} style={{padding:"8px",borderRadius:7,marginBottom:3,background:n.read?"transparent":n.urgent?"#1a0800":"#0a1628",borderLeft:`2px solid ${n.read?"#1a2235":n.urgent?"#ef4444":"#6366f1"}`}} onClick={()=>markRead(n.id)}>
+                        {n.urgent&&!n.read&&<div style={{fontSize:9,color:"#ef4444",fontWeight:800,letterSpacing:"0.07em",marginBottom:2}}>⚠ URGENT — TAX DEADLINE</div>}
+                        <div style={{fontSize:12,color:n.read?"#475569":n.urgent?"#fca5a5":"#e2e8f0",fontWeight:n.read?400:600}}>{n.detail}</div>
+                        <div style={{fontSize:10,color:"#334155",marginTop:1}}>{n.clientName} · {n.timestamp}</div>
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════ CASES ══════════════════ */}
+        {view==="cases"&&(
+          <div style={{display:"flex",gap:16,animation:"fadeUp 0.3s ease"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+                <input className="inp" placeholder="🔍 Search..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:200}}/>
+                <div style={{display:"flex",gap:2,background:"#0d1117",border:"1px solid #1a2235",borderRadius:9,padding:3}}>
+                  {["All",...DEPARTMENTS].map(d=><button key={d} className={`tab${filterDept===d?" on":""}`} onClick={()=>setFilterDept(d)} style={filterDept===d&&d!=="All"?{background:DEPT_COLORS[d]?.light,color:DEPT_COLORS[d]?.accent}:{}}>{d}</button>)}
+                </div>
+                <div style={{display:"flex",gap:2,background:"#0d1117",border:"1px solid #1a2235",borderRadius:9,padding:3}}>
+                  {["All","KL","Seremban"].map(b=><button key={b} className={`tab${filterBranch===b?" on":""}`} onClick={()=>setFilterBranch(b)}>{b}</button>)}
+                </div>
+                {canManage&&<button className="btn bp bsm" onClick={openAdd} style={{marginLeft:"auto"}}>+ New</button>}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"115px 1fr 75px 75px 155px 88px 75px",gap:6,padding:"6px 12px",borderBottom:"1px solid #1a2235"}}>
+                {["Case ID","Client","Branch","Dept","Stage","Deadline","Fee"].map(h=><div key={h} style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>{h}</div>)}
+              </div>
+              <div className="card" style={{overflow:"hidden"}}>
+                {filtered.length===0?<div style={{padding:"32px 0",textAlign:"center",color:"#334155"}}>No cases found.</div>:
+                  filtered.map(c=>{
+                    const dc2=DEPT_COLORS[c.department],days=daysLeft(c.deadline),prog=stageProgress(c,c.stage);
+                    return <div key={c.id} className="row" onClick={()=>setSelCase(selCase?.id===c.id?null:c)} style={{display:"grid",gridTemplateColumns:"115px 1fr 75px 75px 155px 88px 75px",gap:6,padding:"10px 12px",borderBottom:"1px solid #0a0e18",alignItems:"center",background:selCase?.id===c.id?"#0d1525":"transparent"}}>
+                      <div style={{fontFamily:"DM Mono,monospace",fontSize:10,color:dc2.accent,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.id}</div>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:600,color:"#e2e8f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.clientName}</div>
+                        <div style={{fontSize:10,color:"#334155"}}>{c.assignedTo}{c.department==="Secretary"?` · ${SEC_SERVICE_TYPES.find(s=>s.id===c.secServiceType)?.label||""}`:""}</div>
+                      </div>
+                      <div style={{fontSize:11,color:BRANCH_COLORS[c.branch],fontWeight:700}}>{c.branch}</div>
+                      <div className="tag" style={{background:dc2.light,color:dc2.accent,border:`1px solid ${dc2.border}`,fontSize:9}}>{c.department.slice(0,3)}</div>
+                      <div>
+                        <div style={{fontSize:11,color:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:2}}>{stageName(c,c.stage)}</div>
+                        <div style={{background:"#1a2235",borderRadius:3,height:3}}><div style={{width:`${prog}%`,height:3,borderRadius:3,background:`linear-gradient(90deg,${dc2.accent}55,${dc2.accent})`}}/></div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:11,color:days<0?"#f87171":days<=3?"#fb923c":"#64748b",fontWeight:days<0?700:400}}>{c.deadline}</div>
+                        <div style={{fontSize:10,color:days<0?"#f87171":"#334155"}}>{days<0?`${Math.abs(days)}d late`:days===0?"Today":`${days}d`}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:11,color:"#94a3b8"}}>RM{Number(c.fee||0).toLocaleString()}</div>
+                        <div style={{fontSize:10,color:c.feeStatus==="Received"?"#4ade80":c.feeStatus==="Invoiced"?"#fb923c":"#475569"}}>{c.feeStatus}</div>
+                      </div>
+                    </div>;
+                  })
+                }
+              </div>
+              <div style={{marginTop:7,fontSize:12,color:"#334155"}}>{filtered.length} of {cases.length} cases</div>
+            </div>
+
+            {/* Detail panel */}
+            {selCase&&(()=>{
+              const dc2=DEPT_COLORS[selCase.department];
+              const stages=getStages(selCase);
+              const si=stages.findIndex(s=>s.id===selCase.stage);
+              const prog=stageProgress(selCase,selCase.stage);
+              const days=daysLeft(selCase.deadline);
+              const cLogs=auditLog.filter(l=>l.caseId===selCase.id);
+              const canEdit=canManage||(currentUser.id===selCase.assignedId);
+              const svc=SEC_SERVICE_TYPES.find(s=>s.id===selCase.secServiceType);
+              return (
+                <div style={{width:320,flexShrink:0}}>
+                  <div className="card" style={{position:"sticky",top:66,animation:"slideR 0.2s ease",borderColor:dc2.border}}>
+                    <div style={{background:dc2.bg,borderBottom:`2px solid ${dc2.border}`,padding:"13px 15px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:7}}>
+                        <span style={{fontFamily:"DM Mono,monospace",fontSize:10,color:dc2.accent,fontWeight:600}}>{selCase.id}</span>
+                        <button onClick={()=>setSelCase(null)} style={{background:"none",border:"none",color:"#334155",cursor:"pointer",fontSize:14}}>✕</button>
+                      </div>
+                      <div style={{fontSize:15,fontWeight:800,color:"#f1f5f9",marginBottom:2}}>{selCase.clientName}</div>
+                      <div style={{fontSize:11,color:"#475569"}}>{selCase.companyType}{selCase.fye?` · FYE ${selCase.fye}`:""}</div>
+                      {selCase.department==="Secretary"&&svc&&<div style={{fontSize:11,color:dc2.accent,marginTop:3,fontWeight:600}}>📜 {svc.label}</div>}
+                      <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap"}}>
+                        <span className="tag" style={{background:dc2.light,color:dc2.accent,border:`1px solid ${dc2.border}`}}>{selCase.department}</span>
+                        <span className="tag" style={{background:"#0f172a",color:BRANCH_COLORS[selCase.branch],border:"1px solid #1e293b"}}>{selCase.branch}</span>
+                        <span className="tag" style={{background:"#0f172a",color:PRIORITY_COLORS[selCase.priority],border:"1px solid #1e293b"}}>● {selCase.priority}</span>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:2,padding:"7px 11px 0",borderBottom:"1px solid #1a2235"}}>
+                      {["details","workflow","trail","fee"].map(t=>(
+                        <button key={t} className={`tab${activeTab===t?" on":""}`} onClick={()=>setActiveTab(t)} style={{fontSize:11}}>{t==="trail"?"🔒 trail":t}</button>
+                      ))}
+                    </div>
+                    <div style={{padding:"13px 15px",maxHeight:380,overflowY:"auto"}}>
+                      {activeTab==="details"&&(
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+                          {[["Assigned",selCase.assignedTo],["Manager",selCase.manager],["Deadline",selCase.deadline],["Days",days<0?`${Math.abs(days)}d overdue`:days===0?"Today":`${days}d`],["Progress",`${prog}%`],["Branch",selCase.branch]].map(([l,v])=>(
+                            <div key={l}><div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:2}}>{l}</div><div style={{fontSize:12,color:"#e2e8f0"}}>{v}</div></div>
+                          ))}
+                          {selCase.department==="Secretary"&&selCase.secSubTasks?.length>0&&(
+                            <div style={{gridColumn:"1/-1"}}>
+                              <div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Sub-Tasks</div>
+                              {selCase.secSubTasks.map(t=><div key={t} style={{fontSize:11,color:"#34d399",padding:"2px 0"}}>✓ {t}</div>)}
+                            </div>
+                          )}
+                          {selCase.notes&&<div style={{gridColumn:"1/-1"}}><div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3}}>Notes</div><div style={{fontSize:12,color:"#94a3b8",background:"#080c14",borderRadius:6,padding:"7px 9px",lineHeight:1.5}}>{selCase.notes}</div></div>}
+                          {selCase.linkedAudit&&<div style={{gridColumn:"1/-1",background:"#13001f",border:"1px solid #5b21b6",borderRadius:6,padding:"7px 9px",fontSize:11,color:"#c4b5fd"}}>🔗 Linked audit: {selCase.linkedAudit}</div>}
+                          {selCase.linkedTax&&<div style={{gridColumn:"1/-1",background:"#13001f",border:"1px solid #5b21b6",borderRadius:6,padding:"7px 9px",fontSize:11,color:"#c4b5fd"}}>🔗 Tax review simultaneous</div>}
+                          {/* ── TAX DEADLINE PANEL ── */}
+                          {(selCase.department==="Tax"||selCase.department==="Audit")&&selCase.fye&&(()=>{
+                            const dl=calcTaxDeadlines(selCase.fye);
+                            if(!dl)return null;
+                            const fin=deadlineUrgency(dl.finalisation);
+                            const sub=deadlineUrgency(dl.submission);
+                            const mtrs=selCase.mtrsDeadline?deadlineUrgency(selCase.mtrsDeadline):null;
+                            return (
+                              <div style={{gridColumn:"1/-1",background:"#0a0400",border:"2px solid #92400e",borderRadius:8,padding:"11px 13px",marginTop:4}}>
+                                <div style={{fontSize:11,color:"#f59e0b",fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:8}}>⏰ Tax Deadlines — FYE {fmtDate(selCase.fye)}</div>
+                                <div style={{display:"grid",gap:6}}>
+                                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#120800",borderRadius:6,padding:"7px 10px",border:`1px solid ${fin?.color}44`}}>
+                                    <div>
+                                      <div style={{fontSize:10,color:"#94a3b8",marginBottom:1}}>📋 Finalisation Deadline</div>
+                                      <div style={{fontSize:12,fontWeight:700,color:"#f1f5f9"}}>{fmtDate(dl.finalisation)}</div>
+                                      <div style={{fontSize:10,color:"#64748b"}}>Accounts + audit must be finalised by this date</div>
+                                    </div>
+                                    <div style={{fontSize:11,fontWeight:800,color:fin?.color,textAlign:"right",whiteSpace:"nowrap",marginLeft:8}}>{fin?.label}</div>
+                                  </div>
+                                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#120800",borderRadius:6,padding:"7px 10px",border:`2px solid ${sub?.color}66`}}>
+                                    <div>
+                                      <div style={{fontSize:10,color:"#94a3b8",marginBottom:1}}>🚨 TAEF Submission Deadline <span style={{color:"#ef4444",fontWeight:700}}>(NO EOT)</span></div>
+                                      <div style={{fontSize:13,fontWeight:800,color:"#f1f5f9"}}>{fmtDate(dl.submission)}</div>
+                                      <div style={{fontSize:10,color:"#ef4444"}}>Penalty imposed by LHDN if missed — cannot apply EOT</div>
+                                    </div>
+                                    <div style={{fontSize:11,fontWeight:800,color:sub?.color,textAlign:"right",whiteSpace:"nowrap",marginLeft:8}}>{sub?.label}</div>
+                                  </div>
+                                  {selCase.department==="Tax"&&(
+                                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#120800",borderRadius:6,padding:"7px 10px",border:`1px solid ${mtrs?mtrs.color+"44":"#1e293b"}`}}>
+                                      <div>
+                                        <div style={{fontSize:10,color:"#94a3b8",marginBottom:1}}>📤 MTRS Submission</div>
+                                        {selCase.mtrsDeadline
+                                          ? <><div style={{fontSize:12,fontWeight:700,color:"#f1f5f9"}}>{fmtDate(selCase.mtrsDeadline)}</div>
+                                              <div style={{fontSize:10,color:"#64748b"}}>30 days from Form C submission ({fmtDate(selCase.t8DoneDate)})</div></>
+                                          : <><div style={{fontSize:12,color:"#334155"}}>Pending — set when T8 is completed</div>
+                                              <div style={{fontSize:10,color:"#1e293b"}}>30 days after Form C submitted to TAEF</div></>
+                                        }
+                                      </div>
+                                      {mtrs&&<div style={{fontSize:11,fontWeight:800,color:mtrs.color,textAlign:"right",whiteSpace:"nowrap",marginLeft:8}}>{mtrs.label}</div>}
+                                    </div>
+                                  )}
+                                  {selCase.department==="Audit"&&selCase.linkedTax&&(
+                                    <div style={{background:"#0a0614",borderRadius:6,padding:"7px 10px",border:"1px solid #5b21b6",fontSize:11,color:"#c4b5fd"}}>
+                                      ⚠ Linked tax case must be submitted by <strong>{fmtDate(dl.submission)}</strong>. Inform Secretary dept if EOT for audit is needed — tax submission has NO extension.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                      {activeTab==="workflow"&&(
+                        <div>
+                          <div style={{marginBottom:10}}>
+                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:11,color:"#334155"}}>Progress</span><span style={{fontSize:11,color:dc2.accent,fontWeight:700}}>{prog}%</span></div>
+                            <div style={{background:"#1a2235",borderRadius:4,height:5}}><div style={{width:`${prog}%`,height:5,borderRadius:4,background:`linear-gradient(90deg,${dc2.accent}88,${dc2.accent})`,transition:"width 0.4s"}}/></div>
+                          </div>
+                          {stages.map((s,i)=>{
+                            const done=i<si,cur=i===si,fut=i>si;
+                            return <div key={s.id} style={{display:"flex",gap:8,marginBottom:7,opacity:fut?0.35:1}}>
+                              <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+                                <div style={{width:9,height:9,borderRadius:"50%",background:done?"#22c55e":cur?dc2.accent:"#1e293b",border:`2px solid ${done?"#22c55e":cur?dc2.accent:"#1e293b"}`,animation:cur?"pulse 2s infinite":"none",flexShrink:0,marginTop:2}}/>
+                                {i<stages.length-1&&<div style={{width:1,height:14,background:done?"#22c55e22":"#1e293b",marginTop:2}}/>}
+                              </div>
+                              <div style={{paddingBottom:4}}>
+                                <div style={{fontSize:11,fontWeight:600,color:cur?dc2.accent:done?"#4ade80":"#475569"}}>{s.label}</div>
+                                {s.crossDept&&<div style={{fontSize:10,color:"#a78bfa"}}>↗ Notifies {s.crossDept} dept</div>}
+                              </div>
+                            </div>;
+                          })}
+                          {canEdit&&si<stages.length-1&&<button className="btn bp bsm" style={{width:"100%",marginTop:8}} onClick={()=>advanceStage(selCase)}>↓ Advance: {stages[si+1]?.label}</button>}
+                        </div>
+                      )}
+                      {activeTab==="trail"&&(
+                        !canManage?<div style={{background:"#1c1500",border:"1px solid #92400e",borderRadius:8,padding:"10px",fontSize:12,color:"#fbbf24"}}>🔒 Manager/Admin access only.</div>:
+                        cLogs.length===0?<div style={{color:"#334155",fontSize:12}}>No entries yet.</div>:
+                        cLogs.map(l=>(
+                          <div key={l.id} style={{padding:"8px 0",borderBottom:"1px solid #0a0e18"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
+                              <span style={{fontSize:11,fontWeight:700,color:"#e2e8f0"}}>{l.action.replace(/_/g," ")}</span>
+                              <span style={{fontSize:9,color:"#334155",fontFamily:"DM Mono,monospace"}}>{l.timestamp}</span>
+                            </div>
+                            <div style={{fontSize:11,color:"#94a3b8"}}>{l.detail}</div>
+                            <div style={{fontSize:10,color:"#475569",marginTop:1}}>by {l.userName}</div>
+                          </div>
+                        ))
+                      )}
+                      {activeTab==="fee"&&(
+                        <div>
+                          <div style={{background:"#080c14",borderRadius:8,padding:"13px",marginBottom:11,textAlign:"center"}}>
+                            <div style={{fontSize:11,color:"#334155",marginBottom:3}}>Total Fee</div>
+                            <div style={{fontSize:24,fontWeight:800,color:"#f59e0b",letterSpacing:"-0.04em"}}>{fmt(selCase.fee)}</div>
+                            {selCase.department==="Secretary"&&svc&&<div style={{fontSize:10,color:"#475569",marginTop:3}}>Billing: {svc.billing}</div>}
+                            <span className="tag" style={{marginTop:8,display:"inline-block",background:selCase.feeStatus==="Received"?"#052e16":selCase.feeStatus==="Invoiced"?"#1c1000":"#0f172a",color:selCase.feeStatus==="Received"?"#4ade80":selCase.feeStatus==="Invoiced"?"#fb923c":"#475569",border:`1px solid ${selCase.feeStatus==="Received"?"#166534":selCase.feeStatus==="Invoiced"?"#92400e":"#1e293b"}`}}>{selCase.feeStatus}</span>
+                          </div>
+                          {canEdit&&<div><label>Update Fee Status</label><select className="inp" value={selCase.feeStatus} onChange={e=>{const u={...selCase,feeStatus:e.target.value};setCases(p=>p.map(c=>c.id===selCase.id?u:c));setSelCase(u);addAudit(selCase.id,"FEE_UPDATED",`Fee: ${selCase.feeStatus}→${e.target.value} for ${selCase.clientName}`,currentUser);pushNotifs(u,"FEE_UPDATED",`Fee→${e.target.value}: ${selCase.clientName}`,currentUser);showToast("Fee updated.");}}>  {["Pending","Invoiced","Received"].map(s=><option key={s}>{s}</option>)}</select></div>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{padding:"9px 15px",borderTop:"1px solid #1a2235",display:"flex",gap:7}}>
+                      {canManage
+                        ? <><button className="btn bp bsm" style={{flex:1}} onClick={()=>openEdit(selCase)}>✏ Edit Case</button>
+                            <button className="btn bg bsm" style={{color:"#f87171",borderColor:"#7f1d1d"}} onClick={()=>deleteCase(selCase.id)}>🗑</button></>
+                        : isStaff&&selCase.assignedId===currentUser.id
+                          ? <button className="btn bp bsm" style={{flex:1}} onClick={()=>{setEditingId(selCase.id);setForm({stage:selCase.stage,feeStatus:selCase.feeStatus,fee:selCase.fee,notes:selCase.notes});setShowModal(true);}}>✏ Edit Stage / Fee / Notes</button>
+                          : <div style={{fontSize:11,color:"#334155",textAlign:"center",width:"100%",padding:"3px 0"}}>View only — not your case</div>
+                      }
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* ══════════════════ PIPELINE ══════════════════ */}
+        {view==="pipeline"&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:14}}><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>⟳ Workflow Pipeline</h2></div>
+            <div style={{display:"flex",gap:3,marginBottom:14}}>
+              {["All",...DEPARTMENTS].map(d=><button key={d} className={`tab${filterDept===d?" on":""}`} onClick={()=>setFilterDept(d)} style={filterDept===d&&d!=="All"?{background:DEPT_COLORS[d]?.light,color:DEPT_COLORS[d]?.accent}:{}}>{d}</button>)}
+            </div>
+            {(filterDept==="All"?DEPARTMENTS:[filterDept]).map(dept=>{
+              const dc2=DEPT_COLORS[dept];
+              const dCases=cases.filter(c=>c.department===dept);
+              const stages=dept==="Secretary"?SEC_BASE_STAGES:STAGES_MAP[dept]||[];
+              if(!stages.length)return null;
+              return <div key={dept} className="card" style={{marginBottom:14,overflow:"hidden"}}>
+                <div style={{background:dc2.bg,borderBottom:`2px solid ${dc2.border}`,padding:"10px 16px",display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{fontSize:13,fontWeight:800,color:dc2.accent}}>{dept}</span>
+                  <span style={{fontSize:11,color:"#334155"}}>{dCases.length} cases</span>
+                </div>
+                <div style={{overflowX:"auto",padding:"12px 14px"}}>
+                  <div style={{display:"flex",gap:7,minWidth:stages.length*148}}>
+                    {stages.map(stage=>{
+                      const sc=dCases.filter(c=>getStages(c).find(x=>x.id===stage.id)&&c.stage===stage.id);
+                      return <div key={stage.id} style={{minWidth:145,flexShrink:0}}>
+                        <div style={{padding:"5px 8px",borderRadius:7,background:sc.length>0?dc2.light:"#0a0e18",border:`1px solid ${sc.length>0?dc2.border:"#1a2235"}`,marginBottom:6}}>
+                          <div style={{fontSize:9,fontWeight:700,color:sc.length>0?dc2.accent:"#334155",fontFamily:"DM Mono,monospace"}}>{stage.id}</div>
+                          <div style={{fontSize:10,fontWeight:700,color:sc.length>0?"#e2e8f0":"#475569",lineHeight:1.3,marginTop:2}}>{stage.label}</div>
+                          {stage.crossDept&&<div style={{fontSize:9,color:"#a78bfa",marginTop:2}}>↗ {stage.crossDept}</div>}
+                          {sc.length>0&&<div style={{fontSize:10,color:dc2.accent,marginTop:2}}>{sc.length} case{sc.length>1?"s":""}</div>}
+                        </div>
+                        {sc.map(c=>(
+                          <div key={c.id} className="row" style={{background:"#080c14",border:"1px solid #1a2235",borderRadius:6,padding:"6px 8px",marginBottom:4}} onClick={()=>{setSelCase(c);setView("cases");}}>
+                            <div style={{fontSize:10,fontWeight:700,color:"#cbd5e1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.clientName}</div>
+                            <div style={{fontSize:9,color:"#334155",marginTop:1}}>{c.assignedTo}</div>
+                            <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
+                              <span style={{fontSize:9,color:BRANCH_COLORS[c.branch],fontWeight:700}}>{c.branch}</span>
+                              <span style={{fontSize:9,color:daysLeft(c.deadline)<0?"#f87171":daysLeft(c.deadline)<=3?"#fb923c":"#334155"}}>{daysLeft(c.deadline)<0?`${Math.abs(daysLeft(c.deadline))}d`:daysLeft(c.deadline)===0?"Today":`${daysLeft(c.deadline)}d`}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>;
+                    })}
+                  </div>
+                </div>
+              </div>;
+            })}
+          </div>
+        )}
+
+        {/* ══════════════════ SECRETARY ══════════════════ */}
+        {view==="secretary"&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+              <div><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>📜 Secretary Department</h2><p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>SM Corporate House Sdn Bhd · All secretarial services</p></div>
+              {canManage&&<button className="btn bp bsm" onClick={()=>{openAdd();setTimeout(()=>handleDeptChange("Secretary"),0);}}>+ New Secretary Case</button>}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+              {SEC_SERVICE_TYPES.map(svc=>{
+                const cnt=cases.filter(c=>c.department==="Secretary"&&c.secServiceType===svc.id);
+                const dc2=DEPT_COLORS.Secretary;
+                return <div key={svc.id} className="card" style={{padding:"13px 15px"}}>
+                  <div style={{fontSize:18,fontWeight:800,color:dc2.accent,lineHeight:1}}>{cnt.length}</div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#cbd5e1",marginTop:4,lineHeight:1.3}}>{svc.label}</div>
+                  <div style={{fontSize:10,color:"#334155",marginTop:3}}>Billing: {svc.billing}</div>
+                  {cnt.filter(c=>daysLeft(c.deadline)<0).length>0&&<div style={{fontSize:10,color:"#f87171",marginTop:3}}>⚠ {cnt.filter(c=>daysLeft(c.deadline)<0).length} overdue</div>}
+                </div>;
+              })}
+            </div>
+            <div className="card" style={{marginBottom:14,overflow:"hidden"}}>
+              <div style={{background:DEPT_COLORS.Secretary.bg,borderBottom:`2px solid ${DEPT_COLORS.Secretary.border}`,padding:"12px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div><div style={{fontSize:13,fontWeight:700,color:DEPT_COLORS.Secretary.accent}}>MBRS & Annual Returns</div><div style={{fontSize:11,color:"#334155",marginTop:2}}>Linked to audit reports · Invoice issued by Audit dept</div></div>
+                <div style={{fontSize:22,fontWeight:800,color:DEPT_COLORS.Secretary.accent}}>{cases.filter(c=>c.department==="Secretary"&&(c.secServiceType==="mbrs"||c.secServiceType==="annual_ret")).length}</div>
+              </div>
+              <div style={{padding:"12px 16px"}}>
+                {cases.filter(c=>c.department==="Secretary"&&(c.secServiceType==="mbrs"||c.secServiceType==="annual_ret")).length===0?
+                  <div style={{color:"#334155",fontSize:12,padding:"8px 0"}}>No MBRS/Annual Return cases.</div>:
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+                    {cases.filter(c=>c.department==="Secretary"&&(c.secServiceType==="mbrs"||c.secServiceType==="annual_ret")).map(c=>{
+                      const stages=getStages(c),si=stages.findIndex(s=>s.id===c.stage),prog=Math.round(((si+1)/stages.length)*100),days=daysLeft(c.deadline);
+                      return <div key={c.id} className="row" style={{background:"#080c14",borderRadius:8,padding:"10px 12px",border:"1px solid #1a2235"}} onClick={()=>{setSelCase(c);setView("cases");}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                          <span style={{fontFamily:"DM Mono,monospace",fontSize:10,color:DEPT_COLORS.Secretary.accent,fontWeight:600}}>{c.id}</span>
+                          <span style={{fontSize:10,color:days<0?"#f87171":days<=3?"#fb923c":"#475569"}}>{days<0?`${Math.abs(days)}d late`:days===0?"Today":`${days}d`}</span>
+                        </div>
+                        <div style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{c.clientName}</div>
+                        <div style={{fontSize:11,color:"#334155",marginTop:2}}>{stageName(c,c.stage)} · {c.assignedTo}</div>
+                        {c.linkedAudit&&<div style={{fontSize:10,color:"#a78bfa",marginTop:3}}>🔗 {c.linkedAudit}</div>}
+                        <div style={{marginTop:6,background:"#1e293b",borderRadius:3,height:4}}><div style={{width:`${prog}%`,height:4,borderRadius:3,background:"linear-gradient(90deg,#34d39988,#34d399)"}}/></div>
+                      </div>;
+                    })}
+                  </div>
+                }
+              </div>
+            </div>
+            {SEC_SERVICE_TYPES.filter(svc=>cases.some(c=>c.department==="Secretary"&&c.secServiceType===svc.id)).map(svc=>(
+              <div key={svc.id} className="card" style={{marginBottom:10,overflow:"hidden"}}>
+                <div style={{padding:"10px 16px",borderBottom:"1px solid #1a2235",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:13,fontWeight:700,color:DEPT_COLORS.Secretary.accent}}>{svc.label}</span>
+                  <span style={{fontSize:11,color:"#334155"}}>Billing: {svc.billing}</span>
+                </div>
+                <div style={{padding:"10px 14px",display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                  {cases.filter(c=>c.department==="Secretary"&&c.secServiceType===svc.id).map(c=>{
+                    const days=daysLeft(c.deadline);
+                    return <div key={c.id} className="row" style={{background:"#080c14",borderRadius:7,padding:"9px 11px",border:"1px solid #1a2235"}} onClick={()=>{setSelCase(c);setView("cases");}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#e2e8f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.clientName}</div>
+                      <div style={{fontSize:10,color:"#334155",marginTop:1}}>{c.assignedTo} · {c.branch}</div>
+                      <div style={{display:"flex",justifyContent:"space-between",marginTop:5}}>
+                        <span style={{fontSize:10,color:DEPT_COLORS.Secretary.accent}}>{stageName(c,c.stage)}</span>
+                        <span style={{fontSize:10,color:days<0?"#f87171":days<=3?"#fb923c":"#334155",fontWeight:days<0?700:400}}>{days<0?`${Math.abs(days)}d late`:days===0?"Today":`${days}d`}</span>
+                      </div>
+                      <div style={{fontSize:10,color:c.feeStatus==="Received"?"#4ade80":c.feeStatus==="Invoiced"?"#fb923c":"#475569",marginTop:3}}>RM {Number(c.fee||0).toLocaleString()} · {c.feeStatus}</div>
+                    </div>;
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+
+        {/* ══════════════════ COMPANIES ══════════════════ */}
+        {view==="companies"&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10}}>
+              <div>
+                <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>🏢 Client Companies</h2>
+                <p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>{companies.length} companies · Outstanding fees auto-calculated from cases</p>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <input className="inp" placeholder="🔍 Search companies..." value={coSearch} onChange={e=>setCoSearch(e.target.value)} style={{width:220}}/>
+                {canManage&&<button className="btn bp bsm" onClick={openAddCompany}>+ Add Company</button>}
+              </div>
+            </div>
+
+            {/* Summary row */}
+            {(()=>{
+              const totalOwing=companies.reduce((a,co)=>a+getCompanyOwing(co.name),0);
+              const totalBilled=companies.reduce((a,co)=>a+getCompanyTotal(co.name),0);
+              const withOwing=companies.filter(co=>getCompanyOwing(co.name)>0).length;
+              return (
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+                  {[
+                    {l:"Total Companies", v:companies.length,      c:"#6366f1", i:"🏢"},
+                    {l:"With Outstanding",v:withOwing,             c:"#f87171", i:"⚠"},
+                    {l:"Total Outstanding",v:fmt(totalOwing),      c:"#fb923c", i:"💳"},
+                    {l:"Total Billed (All)",v:fmt(totalBilled),    c:"#4ade80", i:"📄"},
+                  ].map(k=>(
+                    <div key={k.l} className="card" style={{padding:"13px 15px"}}>
+                      <div style={{fontSize:16,marginBottom:4}}>{k.i}</div>
+                      <div style={{fontSize:k.v.toString().startsWith("RM")?16:24,fontWeight:800,color:k.c,lineHeight:1,letterSpacing:"-0.03em"}}>{k.v}</div>
+                      <div style={{fontSize:11,color:"#334155",marginTop:3,fontWeight:600}}>{k.l}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            <div style={{display:"flex",gap:14}}>
+              {/* Companies list */}
+              <div style={{flex:1,minWidth:0}}>
+                <div className="card" style={{overflow:"hidden"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 90px 85px 110px 130px 90px",gap:6,padding:"7px 16px",background:"#080c14",borderBottom:"1px solid #1a2235"}}>
+                    {["Company","Type","Branch","FYE","Outstanding","Cases"].map(h=><div key={h} style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>{h}</div>)}
+                  </div>
+                  {companies.filter(co=>!coSearch||co.name.toLowerCase().includes(coSearch.toLowerCase())||co.regNo?.toLowerCase().includes(coSearch.toLowerCase())||co.contactPerson?.toLowerCase().includes(coSearch.toLowerCase())).map(co=>{
+                    const owing=getCompanyOwing(co.name);
+                    const coCases=getCompanyCases(co.name);
+                    const isSelected=selCompany?.id===co.id;
+                    return (
+                      <div key={co.id} className="row" onClick={()=>setSelCompany(isSelected?null:co)}
+                        style={{display:"grid",gridTemplateColumns:"1fr 90px 85px 110px 130px 90px",gap:6,padding:"11px 16px",borderBottom:"1px solid #0a0e18",alignItems:"center",background:isSelected?"#0d1525":"transparent"}}>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:700,color:"#e2e8f0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{co.name}</div>
+                          <div style={{fontSize:10,color:"#334155",marginTop:1,fontFamily:"DM Mono,monospace"}}>{co.regNo||"—"}</div>
+                        </div>
+                        <div style={{fontSize:11,color:"#94a3b8"}}>{co.type}</div>
+                        <div style={{fontSize:11,color:BRANCH_COLORS[co.branch]||"#94a3b8",fontWeight:700}}>{co.branch}</div>
+                        <div style={{fontSize:11,color:"#64748b",fontFamily:"DM Mono,monospace"}}>{co.fye||"—"}</div>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:700,color:owing>0?"#fb923c":"#4ade80",letterSpacing:"-0.02em"}}>
+                            {owing>0?fmt(owing):"✓ Clear"}
+                          </div>
+                          {owing>0&&<div style={{fontSize:10,color:"#475569",marginTop:1}}>pending+invoiced</div>}
+                        </div>
+                        <div style={{fontSize:12,color:"#6366f1",fontWeight:700}}>{coCases.length}</div>
+                      </div>
+                    );
+                  })}
+                  {companies.filter(co=>!coSearch||co.name.toLowerCase().includes(coSearch.toLowerCase())).length===0&&(
+                    <div style={{padding:"32px 0",textAlign:"center",color:"#334155",fontSize:13}}>No companies found.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Company detail panel */}
+              {selCompany&&(()=>{
+                const owing=getCompanyOwing(selCompany.name);
+                const total=getCompanyTotal(selCompany.name);
+                const coCases=getCompanyCases(selCompany.name);
+                const received=coCases.filter(x=>x.feeStatus==="Received").reduce((a,x)=>a+Number(x.fee||0),0);
+                return (
+                  <div style={{width:300,flexShrink:0}}>
+                    <div className="card" style={{position:"sticky",top:66,animation:"slideR 0.2s ease",border:"1px solid #1e3a5f"}}>
+                      <div style={{background:"#0a1628",borderBottom:"2px solid #1e3a5f",padding:"14px 16px"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                          <span style={{fontSize:10,color:"#38bdf8",fontWeight:700,fontFamily:"DM Mono,monospace"}}>{selCompany.id}</span>
+                          <button onClick={()=>setSelCompany(null)} style={{background:"none",border:"none",color:"#334155",cursor:"pointer",fontSize:14}}>✕</button>
+                        </div>
+                        <div style={{fontSize:14,fontWeight:800,color:"#f1f5f9",lineHeight:1.3,marginBottom:4}}>{selCompany.name}</div>
+                        <div style={{fontSize:11,color:"#475569"}}>{selCompany.regNo} · {selCompany.type}</div>
+                        <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap"}}>
+                          <span className="tag" style={{background:"#0a1020",color:BRANCH_COLORS[selCompany.branch],border:"1px solid #1e293b"}}>{selCompany.branch}</span>
+                          {selCompany.fye&&<span className="tag" style={{background:"#0a1020",color:"#64748b",border:"1px solid #1e293b"}}>FYE {selCompany.fye}</span>}
+                        </div>
+                      </div>
+                      <div style={{padding:"14px 16px",maxHeight:480,overflowY:"auto"}}>
+                        {/* Owing summary */}
+                        <div style={{background:"#080c14",borderRadius:10,padding:"13px",marginBottom:13,border:`1px solid ${owing>0?"#92400e":"#166534"}`}}>
+                          <div style={{fontSize:11,color:"#334155",marginBottom:3}}>Outstanding Balance</div>
+                          <div style={{fontSize:22,fontWeight:800,color:owing>0?"#fb923c":"#4ade80",letterSpacing:"-0.03em"}}>{owing>0?fmt(owing):"RM 0"}</div>
+                          <div style={{fontSize:11,color:"#334155",marginTop:4}}>{owing>0?"Pending + Invoiced fees":"All fees settled ✓"}</div>
+                          <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"1px solid #0f1628"}}>
+                            <div><div style={{fontSize:10,color:"#334155"}}>Total Billed</div><div style={{fontSize:12,fontWeight:700,color:"#38bdf8"}}>{fmt(total)}</div></div>
+                            <div style={{textAlign:"right"}}><div style={{fontSize:10,color:"#334155"}}>Received</div><div style={{fontSize:12,fontWeight:700,color:"#4ade80"}}>{fmt(received)}</div></div>
+                          </div>
+                        </div>
+                        {/* Contact */}
+                        {(selCompany.contactPerson||selCompany.contactPhone||selCompany.contactEmail)&&(
+                          <div style={{marginBottom:12}}>
+                            <div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Contact</div>
+                            {selCompany.contactPerson&&<div style={{fontSize:12,color:"#e2e8f0",fontWeight:600,marginBottom:3}}>{selCompany.contactPerson}</div>}
+                            {selCompany.contactPhone&&<div style={{fontSize:12,color:"#38bdf8",marginBottom:2}}>📞 {selCompany.contactPhone}</div>}
+                            {selCompany.contactEmail&&<div style={{fontSize:12,color:"#a78bfa"}}>✉ {selCompany.contactEmail}</div>}
+                          </div>
+                        )}
+                        {/* Departments */}
+                        {selCompany.departments?.length>0&&(
+                          <div style={{marginBottom:12}}>
+                            <div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Services</div>
+                            <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                              {selCompany.departments.map(d=><span key={d} className="tag" style={{background:DEPT_COLORS[d]?.light,color:DEPT_COLORS[d]?.accent,border:`1px solid ${DEPT_COLORS[d]?.border}`}}>{d}</span>)}
+                            </div>
+                          </div>
+                        )}
+                        {/* Assigned staff */}
+                        {selCompany.assignedStaff?.length>0&&(
+                          <div style={{marginBottom:12}}>
+                            <div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Assigned Staff</div>
+                            {selCompany.assignedStaff.map(sid=>{
+                              const s=staff.find(x=>x.id===sid);
+                              return s?<div key={sid} style={{display:"flex",alignItems:"center",gap:7,marginBottom:4}}>
+                                <div style={{width:22,height:22,borderRadius:"50%",background:"linear-gradient(135deg,#7c3aed,#a78bfa)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:"white"}}>{initials(s.name)}</div>
+                                <div><div style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{s.name}</div><div style={{fontSize:10,color:"#334155"}}>{s.department} · {s.branch}</div></div>
+                              </div>:null;
+                            })}
+                          </div>
+                        )}
+                        {/* Notes */}
+                        {selCompany.notes&&<div style={{marginBottom:12}}>
+                          <div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Notes</div>
+                          <div style={{fontSize:12,color:"#94a3b8",background:"#080c14",borderRadius:6,padding:"8px 10px",lineHeight:1.5}}>{selCompany.notes}</div>
+                        </div>}
+                        {/* Cases linked */}
+                        <div>
+                          <div style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Active Cases ({coCases.length})</div>
+                          {coCases.length===0?<div style={{fontSize:12,color:"#334155"}}>No cases yet.</div>:
+                            coCases.map(cas=>{
+                              const dc2=DEPT_COLORS[cas.department];
+                              return <div key={cas.id} className="row" style={{background:"#080c14",borderRadius:7,padding:"8px 10px",marginBottom:5,border:"1px solid #1a2235"}}
+                                onClick={()=>{setSelCase(cas);setView("cases");}}>
+                                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                                  <span style={{fontFamily:"DM Mono,monospace",fontSize:10,color:dc2.accent,fontWeight:600}}>{cas.id}</span>
+                                  <span className="tag" style={{background:cas.feeStatus==="Received"?"#052e16":cas.feeStatus==="Invoiced"?"#1c1000":"#0f172a",color:cas.feeStatus==="Received"?"#4ade80":cas.feeStatus==="Invoiced"?"#fb923c":"#475569",border:"none",fontSize:9}}>{cas.feeStatus}</span>
+                                </div>
+                                <div style={{fontSize:11,color:"#94a3b8"}}>{cas.department} · {stageName(cas,cas.stage)}</div>
+                                <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                                  <span style={{fontSize:11,color:dc2.accent}}>{fmt(cas.fee)}</span>
+                                  <span style={{fontSize:10,color:daysLeft(cas.deadline)<0?"#f87171":"#334155"}}>{daysLeft(cas.deadline)<0?`${Math.abs(daysLeft(cas.deadline))}d late`:`${daysLeft(cas.deadline)}d`}</span>
+                                </div>
+                              </div>;
+                            })
+                          }
+                        </div>
+                      </div>
+                      {canManage&&<div style={{padding:"9px 15px",borderTop:"1px solid #1a2235",display:"flex",gap:7}}>
+                        <button className="btn bp bsm" style={{flex:1}} onClick={()=>openEditCompany(selCompany)}>✏ Edit</button>
+                        {isAdmin&&<button className="btn bg bsm" style={{color:"#f87171",borderColor:"#7f1d1d"}} onClick={()=>deleteCompany(selCompany.id)}>🗑</button>}
+                      </div>}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════ MY KPI ══════════════════ */}
+        {view==="kpi"&&(
+          <div style={{animation:"fadeUp 0.4s ease"}}>
+            {isManager&&(
+              <div style={{textAlign:"center",padding:"60px 24px"}}>
+                <div style={{fontSize:48,marginBottom:14}}>🔒</div>
+                <div style={{fontSize:20,fontWeight:800,color:"#f1f5f9",marginBottom:8}}>KPI Data is Private</div>
+                <div style={{fontSize:14,color:"#475569",maxWidth:400,margin:"0 auto"}}>Individual KPI performance is confidential to each staff member and the Admin only.</div>
+              </div>
+            )}
+            {(isStaff||isAdmin)&&(
+              <>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:10}}>
+                  <div>
+                    <h2 style={{margin:0,fontSize:22,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>🎯 My KPI Dashboard</h2>
+                    <p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>Private · Only visible to you{isAdmin?" and Admin":""}</p>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button onClick={toggleKpiVisible}
+                      style={{display:"flex",alignItems:"center",gap:6,background:myKpiVisible()?"#0f0a1f":"#1a0a2e",border:`1px solid ${myKpiVisible()?"#2d1f4e":"#5b21b6"}`,borderRadius:8,padding:"7px 13px",cursor:"pointer",fontSize:12,color:myKpiVisible()?"#a78bfa":"#7c3aed",fontWeight:600,fontFamily:"inherit"}}>
+                      {myKpiVisible()?"👁 Figures visible":"🙈 Figures hidden"}
+                    </button>
+                    <select className="inp" value={kpiYear} onChange={e=>setKpiYear(Number(e.target.value))} style={{width:90,padding:"6px 10px",fontSize:12}}>
+                      {[CUR_YEAR-1,CUR_YEAR].map(y=><option key={y}>{y}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {/* Hero motivational banner */}
+                <div style={{background:"linear-gradient(135deg,#0f0a1f,#1a0a2e)",border:"1px solid #2d1f4e",borderRadius:16,padding:"22px 26px",marginBottom:22,position:"relative",overflow:"hidden"}}>
+                  <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at top right,#7c3aed22,transparent 60%)",pointerEvents:"none"}}/>
+                  <div style={{fontSize:11,color:"#7c3aed",fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:6,fontFamily:"DM Mono,monospace"}}>Your KPI · {kpiYear}</div>
+                  <div style={{fontSize:20,fontWeight:800,color:"#f1f5f9",letterSpacing:"-0.03em",marginBottom:5}}>
+                    Hi {currentUser.name.split(" ")[0]} 👋 — {myPct>=100?"Bonus eligible! 🏆":myPct>=75?"Almost there! 🔥":myPct>=50?"Keep pushing! ⚡":"Let's get going! 🌱"}
+                  </div>
+                  <div style={{fontSize:13,color:"#64748b",fontStyle:"italic"}}>{MOTIV[motivIdx]}</div>
+                  {myMS&&<div style={{marginTop:10,display:"inline-flex",alignItems:"center",gap:8,background:"#1a0a2e",border:`1px solid ${myMS.color}44`,borderRadius:20,padding:"5px 12px"}}><span style={{fontSize:15}}>{myMS.icon}</span><span style={{fontSize:12,color:myMS.color,fontWeight:600}}>{myMS.msg}</span></div>}
+                </div>
+
+                {/* Main stats */}
+                <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:20,marginBottom:20}}>
+                  <div className="card" style={{padding:22,display:"flex",flexDirection:"column",alignItems:"center",gap:14,minWidth:190,border:"1px solid #2d1f4e"}}>
+                    <CircleProgress pct={myPct} size={150} color={myPct>=100?"#a78bfa":myPct>=75?"#f59e0b":myPct>=50?"#38bdf8":"#34d399"}/>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:11,color:"#334155",marginBottom:2}}>Annual KPI Target</div>
+                      {myKpiVisible()
+                        ? <><div style={{fontSize:17,fontWeight:800,color:"#a78bfa",letterSpacing:"-0.03em"}}>{fmt(myTgt)}</div>
+                            <div style={{fontSize:10,color:"#1e293b",marginTop:2}}>({fmt(mySalary)} × 4.3 × 12)</div></>
+                        : <div style={{fontSize:13,color:"#334155",letterSpacing:"0.1em"}}>••••••</div>
+                      }
+                    </div>
+                    {myRank>0&&<div style={{background:"#0f0a1f",border:"1px solid #2d1f4e",borderRadius:10,padding:"7px 14px",textAlign:"center",width:"100%"}}>
+                      <div style={{fontSize:10,color:"#334155",marginBottom:2}}>Anonymous Rank</div>
+                      <div style={{fontSize:20,fontWeight:900,color:myRank===1?"#f59e0b":myRank<=3?"#a78bfa":"#475569"}}>{myRank===1?"🥇":myRank===2?"🥈":myRank===3?"🥉":`#${myRank}`}</div>
+                      <div style={{fontSize:10,color:"#334155"}}>of {myBoard.length} staff</div>
+                    </div>}
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                    <div className="card" style={{padding:18,border:"1px solid #0c2340"}}>
+                      <div style={{fontSize:11,color:"#38bdf8",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:8}}>📄 Total Billed</div>
+                      {myKpiVisible()
+                        ? <><div style={{fontSize:26,fontWeight:900,color:"#38bdf8",letterSpacing:"-0.04em"}}>{fmt(myYrData.billed)}</div>
+                            <div style={{fontSize:11,color:"#334155",marginTop:3}}>Target: {fmt(myTgt)}</div>
+                            <div style={{marginTop:8,background:"#0a1020",borderRadius:4,height:5}}><div style={{width:`${Math.min(myYrData.billed/myTgt*100,100)}%`,height:5,borderRadius:4,background:"linear-gradient(90deg,#0369a1,#38bdf8)"}}/></div>
+                            <div style={{fontSize:11,color:"#334155",marginTop:3}}>{Math.round(myYrData.billed/myTgt*100)}% billed</div></>
+                        : <div style={{fontSize:22,color:"#0c2340",letterSpacing:"0.15em",marginTop:6}}>••••••</div>}
+                    </div>
+                    <div className="card" style={{padding:18,border:"1px solid #14532d"}}>
+                      <div style={{fontSize:11,color:"#4ade80",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:8}}>💰 Total Collected</div>
+                      {myKpiVisible()
+                        ? <><div style={{fontSize:26,fontWeight:900,color:"#4ade80",letterSpacing:"-0.04em"}}>{fmt(myYrData.collected)}</div>
+                            <div style={{fontSize:11,color:"#334155",marginTop:3}}>Target: {fmt(myTgt)}</div>
+                            <div style={{marginTop:8,background:"#0a1020",borderRadius:4,height:5}}><div style={{width:`${Math.min(myYrData.collected/myTgt*100,100)}%`,height:5,borderRadius:4,background:"linear-gradient(90deg,#166534,#4ade80)"}}/></div>
+                            <div style={{fontSize:11,color:"#334155",marginTop:3}}>{Math.round(myYrData.collected/myTgt*100)}% collected</div></>
+                        : <div style={{fontSize:22,color:"#14532d",letterSpacing:"0.15em",marginTop:6}}>••••••</div>}
+                    </div>
+                    <div className="card" style={{padding:18,border:`1px solid ${myScore>=myTgt?"#2d1f4e":"#1c1000"}`}}>
+                      <div style={{fontSize:11,color:myScore>=myTgt?"#a78bfa":"#fb923c",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:8}}>{myScore>=myTgt?"🏆 Surplus":"⚡ Gap to Target"}</div>
+                      {myKpiVisible()
+                        ? <><div style={{fontSize:26,fontWeight:900,color:myScore>=myTgt?"#a78bfa":"#fb923c",letterSpacing:"-0.04em"}}>{fmt(Math.abs(myScore-myTgt))}</div>
+                            <div style={{fontSize:12,color:"#334155",marginTop:5}}>{myScore>=myTgt?"Above KPI — bonus eligible! 🎉":"Remaining to hit KPI target"}</div></>
+                        : <div style={{fontSize:22,color:"#1c1000",letterSpacing:"0.15em",marginTop:6}}>••••••</div>}
+                    </div>
+                    <div className="card" style={{padding:18,border:"1px solid #141a2e"}}>
+                      <div style={{fontSize:11,color:"#f59e0b",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:8}}>📈 Projection</div>
+                      {myProj?<>
+                        <div style={{fontSize:14,fontWeight:800,color:myProj.onTrack?"#4ade80":"#f87171"}}>{myProj.onTrack?"✅ On Track":"⚠ Behind Pace"}</div>
+                        <div style={{fontSize:12,color:"#475569",marginTop:5,lineHeight:1.5}}>Target hit by <strong style={{color:"#f1f5f9"}}>{MONTHS[Math.min(myProj.mo-1,11)]} {kpiYear}</strong>{myProj.mo>12?" if pace improves":""}.</div>
+                        <div style={{fontSize:11,color:"#334155",marginTop:3}}>Avg/month: {fmt(myProj.avg)}</div>
+                      </>:<div style={{fontSize:12,color:"#334155"}}>Not enough data yet.</div>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Monthly breakdown */}
+                <div className="card" style={{marginBottom:20,border:"1px solid #141a2e"}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid #0f1628",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{fontSize:14,fontWeight:700}}>📅 Monthly Breakdown — {kpiYear}</div>
+                    <div style={{fontSize:11,color:"#334155"}}>Monthly target: {fmt(myMonTgt)}</div>
+                  </div>
+                  <div style={{overflowX:"auto",padding:"14px 18px"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:6,minWidth:660,marginBottom:12}}>
+                      {MONTHS.map((mo,m)=>{
+                        const d=getMonthKpi(currentUser.id,kpiYear,m);
+                        const isFut=kpiYear===CUR_YEAR&&m>CUR_MONTH;
+                        const isCur=kpiYear===CUR_YEAR&&m===CUR_MONTH;
+                        const bPct=Math.min(d.billed/myMonTgt*100,100);
+                        const cPct=Math.min(d.collected/myMonTgt*100,100);
+                        return <div key={mo} style={{opacity:isFut?0.3:1}}>
+                          <div style={{fontSize:9,color:isCur?"#a78bfa":"#334155",fontWeight:isCur?700:400,textAlign:"center",marginBottom:4,fontFamily:"DM Mono,monospace"}}>{mo}</div>
+                          <div style={{background:"#0a1020",borderRadius:7,padding:"7px 5px",border:`1px solid ${isCur?"#2d1f4e":"#0f1628"}`}}>
+                            <div style={{display:"flex",gap:2,justifyContent:"center",alignItems:"flex-end",height:36,marginBottom:4}}>
+                              <div style={{width:7,borderRadius:2,background:"linear-gradient(to top,#0369a1,#38bdf8)",height:`${bPct}%`,minHeight:d.billed>0?3:0,transition:"height 0.8s ease"}}/>
+                              <div style={{width:7,borderRadius:2,background:"linear-gradient(to top,#166534,#4ade80)",height:`${cPct}%`,minHeight:d.collected>0?3:0,transition:"height 0.8s ease 0.2s"}}/>
+                            </div>
+                            <div style={{fontSize:8,color:d.billed>=myMonTgt&&d.collected>=myMonTgt?"#4ade80":"#475569",textAlign:"center"}}>{d.billed>0||d.collected>0?(d.billed>=myMonTgt&&d.collected>=myMonTgt?"✓":"~"):"–"}</div>
+                          </div>
+                        </div>;
+                      })}
+                    </div>
+                    <div style={{display:"flex",gap:14,justifyContent:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#475569"}}><div style={{width:10,height:10,borderRadius:2,background:"#38bdf8"}}/>Billed</div>
+                      <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#475569"}}><div style={{width:10,height:10,borderRadius:2,background:"#4ade80"}}/>Collected</div>
+                    </div>
+                  </div>
+                  <div style={{borderTop:"1px solid #0f1628"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"70px 1fr 1fr 1fr 1fr",gap:8,padding:"7px 18px",background:"#060912"}}>
+                      {["Month","Billed","Collected","Avg Score","vs Target"].map(h=><div key={h} style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>{h}</div>)}
+                    </div>
+                    {MONTHS.map((mo,m)=>{
+                      const d=getMonthKpi(currentUser.id,kpiYear,m);
+                      const isFut=kpiYear===CUR_YEAR&&m>CUR_MONTH;
+                      const isCur=kpiYear===CUR_YEAR&&m===CUR_MONTH;
+                      const avg=(d.billed+d.collected)/2;
+                      const diff=avg-myMonTgt;
+                      return <div key={mo} style={{display:"grid",gridTemplateColumns:"70px 1fr 1fr 1fr 1fr",gap:8,padding:"8px 18px",borderTop:"1px solid #060912",background:isCur?"#0a0e1a":"transparent",opacity:isFut?0.3:1}}>
+                        <div style={{fontSize:11,color:isCur?"#a78bfa":"#475569",fontFamily:"DM Mono,monospace",fontWeight:isCur?700:400}}>{mo}</div>
+                        <div style={{fontSize:12,color:"#38bdf8"}}>{fmt(d.billed)}</div>
+                        <div style={{fontSize:12,color:"#4ade80"}}>{fmt(d.collected)}</div>
+                        <div style={{fontSize:12,color:"#e2e8f0"}}>{fmt(avg)}</div>
+                        <div style={{fontSize:12,color:diff>=0?"#4ade80":"#f87171",fontWeight:diff>=0?700:400}}>{diff>=0?"+":""}{fmt(diff)}</div>
+                      </div>;
+                    })}
+                    <div style={{display:"grid",gridTemplateColumns:"70px 1fr 1fr 1fr 1fr",gap:8,padding:"9px 18px",borderTop:"2px solid #1a2235",background:"#060912"}}>
+                      <div style={{fontSize:11,color:"#a78bfa",fontWeight:700}}>TOTAL</div>
+                      <div style={{fontSize:12,fontWeight:700,color:"#38bdf8"}}>{fmt(myYrData.billed)}</div>
+                      <div style={{fontSize:12,fontWeight:700,color:"#4ade80"}}>{fmt(myYrData.collected)}</div>
+                      <div style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{fmt(myScore)}</div>
+                      <div style={{fontSize:12,fontWeight:700,color:myScore>=myTgt?"#4ade80":"#f87171"}}>{myScore>=myTgt?"✅ KPI MET":`${fmt(myTgt-myScore)} short`}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Anonymous leaderboard */}
+                <div className="card" style={{border:"1px solid #141a2e"}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid #0f1628"}}>
+                    <div style={{fontSize:14,fontWeight:700}}>🏅 Anonymous Leaderboard — {kpiYear}</div>
+                    <div style={{fontSize:11,color:"#334155",marginTop:2}}>Names hidden. Your position highlighted.</div>
+                  </div>
+                  <div style={{padding:"12px 18px"}}>
+                    {myBoard.map((l,i)=>(
+                      <div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"9px 12px",borderRadius:10,marginBottom:5,background:l.isMe?"#0f0a1f":"transparent",border:l.isMe?"1px solid #2d1f4e":"1px solid transparent"}}>
+                        <div style={{width:30,height:30,borderRadius:7,background:i===0?"#1c1000":i===1?"#0a0a14":i===2?"#0a100a":"#0a1020",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,border:`1px solid ${i===0?"#92400e":i===1?"#1e293b":i===2?"#166534":"#141a2e"}`}}>
+                          {i===0?"🥇":i===1?"🥈":i===2?"🥉":<span style={{fontSize:11,fontWeight:700,color:"#475569"}}>#{i+1}</span>}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                            <div style={{fontSize:12,fontWeight:l.isMe?800:500,color:l.isMe?"#a78bfa":"#475569"}}>{l.isMe?"YOU 👈":`Colleague ${i+1}`}</div>
+                            <div style={{fontSize:10,color:"#1e293b"}}>{l.dept} · {l.branch}</div>
+                          </div>
+                          <div style={{background:"#0a1020",borderRadius:4,height:5}}>
+                            <div style={{width:`${Math.min(l.pct,100)}%`,height:5,borderRadius:4,background:l.pct>=100?"linear-gradient(90deg,#7c3aed,#a78bfa)":l.pct>=75?"linear-gradient(90deg,#92400e,#f59e0b)":l.pct>=50?"linear-gradient(90deg,#0369a1,#38bdf8)":"linear-gradient(90deg,#166534,#34d399)",transition:"width 0.8s ease"}}/>
+                          </div>
+                        </div>
+                        <div style={{textAlign:"right",minWidth:55}}>
+                          <div style={{fontSize:14,fontWeight:800,color:l.pct>=100?"#a78bfa":"#e2e8f0",letterSpacing:"-0.03em"}}>{Math.round(l.pct)}%</div>
+                          <div style={{fontSize:10,color:"#334155"}}>{l.pct>=100?"✅ Bonus":"In progress"}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Admin-only: edit entries for themselves + all staff */}
+                {isAdmin&&(
+                  <div style={{marginTop:20}}>
+                    <h3 style={{fontSize:14,fontWeight:700,margin:"0 0 12px",color:"#f1f5f9"}}>👑 Admin: Edit KPI Entries</h3>
+                    {staff.filter(s=>s.role==="staff").map(s=>(
+                      <details key={s.id} style={{marginBottom:8}}>
+                        <summary style={{cursor:"pointer",padding:"10px 16px",background:"#08090f",border:"1px solid #141a2e",borderRadius:8,fontSize:13,fontWeight:600,color:"#e2e8f0",listStyle:"none",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <span>{s.name} <span style={{fontSize:11,color:"#475569"}}>({s.department} · {s.branch})</span></span>
+                          <span style={{fontSize:11,color:"#334155"}}>▾</span>
+                        </summary>
+                        <div style={{background:"#060912",border:"1px solid #0f1628",borderTop:"none",borderRadius:"0 0 8px 8px",padding:"12px 14px"}}>
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                            {MONTHS.map((mo,m)=>{
+                              const isFut=kpiYear===CUR_YEAR&&m>CUR_MONTH;
+                              const d=getMonthKpi(s.id,kpiYear,m);
+                              const isEd=editKpiKey===`${s.id}-${m}`;
+                              return <div key={mo} style={{background:"#08090f",border:"1px solid #141a2e",borderRadius:7,padding:"9px 11px",opacity:isFut?0.4:1}}>
+                                <div style={{fontSize:10,color:"#a78bfa",fontWeight:700,marginBottom:5,fontFamily:"DM Mono,monospace"}}>{mo}</div>
+                                {isEd?(
+                                  <div>
+                                    <input className="inp" type="number" value={kpiEditForm.billed} onChange={e=>setKpiEditForm(p=>({...p,billed:e.target.value}))} placeholder="Billed" style={{marginBottom:5}}/>
+                                    <input className="inp" type="number" value={kpiEditForm.collected} onChange={e=>setKpiEditForm(p=>({...p,collected:e.target.value}))} placeholder="Collected" style={{marginBottom:7}}/>
+                                    <div style={{display:"flex",gap:5}}>
+                                      <button className="btn bp bsm" style={{flex:1}} onClick={()=>saveKpiEntry(s.id,kpiYear,m,kpiEditForm.billed,kpiEditForm.collected)}>Save</button>
+                                      <button className="btn bg bsm" onClick={()=>setEditKpiKey(null)}>×</button>
+                                    </div>
+                                  </div>
+                                ):(
+                                  <div>
+                                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:10,color:"#38bdf8"}}>B:{fmt(d.billed)}</span><span style={{fontSize:10,color:"#4ade80"}}>C:{fmt(d.collected)}</span></div>
+                                    {!isFut&&<button className="btn bg bsm" style={{width:"100%",fontSize:10}} onClick={()=>{setEditKpiKey(`${s.id}-${m}`);setKpiEditForm({billed:d.billed,collected:d.collected});}}>✏ Edit</button>}
+                                  </div>
+                                )}
+                              </div>;
+                            })}
+                          </div>
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════ AUDIT TRAIL ══════════════════ */}
+        {view==="audit-trail"&&canManage&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:16}}><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>🔒 Audit Trail</h2><p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>Tamper-proof log · All actions timestamped</p></div>
+            <div className="card" style={{overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"170px 120px 130px 1fr 120px",gap:8,padding:"7px 16px",borderBottom:"1px solid #1a2235"}}>
+                {["Timestamp","Action","Case","Detail","By"].map(h=><div key={h} style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>{h}</div>)}
+              </div>
+              {auditLog.length===0?<div style={{padding:"30px 0",textAlign:"center",color:"#334155"}}>No entries yet.</div>:
+                auditLog.map((l,i)=>(
+                  <div key={l.id} style={{display:"grid",gridTemplateColumns:"170px 120px 130px 1fr 120px",gap:8,padding:"9px 16px",borderBottom:"1px solid #0a0e18",alignItems:"start",background:i%2===0?"transparent":"#0a0e1855"}}>
+                    <div style={{fontSize:10,color:"#475569",fontFamily:"DM Mono,monospace",lineHeight:1.4}}>{l.timestamp}</div>
+                    <div><span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:4,background:l.action.includes("STAGE")?"#0c2340":l.action.includes("CREAT")?"#052e16":l.action.includes("DELET")?"#2d0a0a":l.action.includes("LOGIN")?"#13001f":"#1a1a2e",color:l.action.includes("STAGE")?"#38bdf8":l.action.includes("CREAT")?"#4ade80":l.action.includes("DELET")?"#f87171":l.action.includes("LOGIN")?"#a78bfa":"#94a3b8"}}>{l.action.replace(/_/g," ")}</span></div>
+                    <div style={{fontSize:10,color:"#6366f1",fontFamily:"DM Mono,monospace"}}>{l.caseId||"—"}</div>
+                    <div style={{fontSize:12,color:"#94a3b8",lineHeight:1.4}}>{l.detail}</div>
+                    <div><div style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{l.userName}</div><div style={{fontSize:10,color:"#334155"}}>{l.userRole}</div></div>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════ REPORT ══════════════════ */}
+        {view==="report"&&canManage&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:16}}><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>↗ Management Report</h2><p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>{new Date().toLocaleDateString("en-MY",{year:"numeric",month:"long",day:"numeric"})}</p></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+              <div className="card" style={{padding:18}}>
+                <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700}}>Fee Collection</h3>
+                {["Pending","Invoiced","Received"].map(status=>{
+                  const sc=cases.filter(c=>c.feeStatus===status),total=sc.reduce((a,c)=>a+Number(c.fee||0),0);
+                  const color=status==="Received"?"#4ade80":status==="Invoiced"?"#fb923c":"#f87171";
+                  return <div key={status} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #0a0e18"}}>
+                    <div><div style={{fontSize:12,fontWeight:700,color}}>{status}</div><div style={{fontSize:11,color:"#334155"}}>{sc.length} cases</div></div>
+                    <div style={{fontSize:18,fontWeight:800,color,letterSpacing:"-0.03em"}}>RM {total.toLocaleString()}</div>
+                  </div>;
+                })}
+              </div>
+              <div className="card" style={{padding:18}}>
+                <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700}}>By Department</h3>
+                {DEPARTMENTS.map(dept=>{
+                  const dc2=DEPT_COLORS[dept],dC=cases.filter(c=>c.department===dept);
+                  const over=dC.filter(c=>daysLeft(c.deadline)<0).length;
+                  const total=dC.reduce((a,c)=>a+Number(c.fee||0),0);
+                  return <div key={dept} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #0a0e18"}}>
+                    <div><div style={{fontSize:12,fontWeight:700,color:dc2.accent}}>{dept}</div><div style={{fontSize:11,color:"#334155"}}>{dC.length} cases{over>0?` · ${over} overdue`:""}</div></div>
+                    <div style={{textAlign:"right"}}><div style={{fontSize:13,fontWeight:700,color:dc2.accent}}>{dC.length}</div><div style={{fontSize:11,color:"#475569"}}>RM {total.toLocaleString()}</div></div>
+                  </div>;
+                })}
+              </div>
+            </div>
+            {isAdmin&&(
+              <div className="card" style={{padding:18,marginBottom:14}}>
+                <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700}}>🎯 KPI Overview (Admin Only)</h3>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 90px 110px 110px 110px 110px 100px",gap:8,padding:"6px 0",borderBottom:"1px solid #1a2235"}}>
+                  {["Staff","Dept","Salary/mo","Annual Tgt","Billed","Collected","Status"].map(h=><div key={h} style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.04em"}}>{h}</div>)}
+                </div>
+                {staff.filter(s=>s.role==="staff").map(s=>{
+                  const{billed,collected}=kpiYearTotal(kpiData,s.id,CUR_YEAR),tgt=kpiTarget(s.salary||0),score=(billed+collected)/2,pct=tgt>0?(score/tgt)*100:0,bonus=pct>=100;
+                  return <div key={s.id} style={{display:"grid",gridTemplateColumns:"1fr 90px 110px 110px 110px 110px 100px",gap:8,padding:"9px 0",borderBottom:"1px solid #0a0e18",alignItems:"center"}}>
+                    <div><div style={{fontSize:13,fontWeight:700,color:"#e2e8f0"}}>{s.name}</div><div style={{fontSize:11,color:"#334155"}}>{s.branch}</div></div>
+                    <div style={{fontSize:11,color:"#475569"}}>{s.department}</div>
+                    <div style={{fontSize:12,color:"#94a3b8"}}>{fmt(s.salary)}</div>
+                    <div style={{fontSize:12,color:"#a78bfa",fontWeight:600}}>{fmt(tgt)}</div>
+                    <div style={{fontSize:12,color:"#38bdf8"}}>{fmt(billed)}</div>
+                    <div style={{fontSize:12,color:"#4ade80"}}>{fmt(collected)}</div>
+                    <span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:6,background:bonus?"#13001f":"#1c1000",color:bonus?"#a78bfa":"#fb923c",border:`1px solid ${bonus?"#5b21b6":"#92400e"}`,textAlign:"center"}}>{bonus?"✅ Bonus":"⏳ In Progress"}</span>
+                  </div>;
+                })}
+              </div>
+            )}
+            {/* TAX SUBMISSION DEADLINES — always shown in report */}
+            <div className="card" style={{padding:18,marginBottom:14,border:"2px solid #92400e"}}>
+              <h3 style={{margin:"0 0 4px",fontSize:14,fontWeight:700,color:"#f59e0b"}}>🚨 Tax Submission Deadlines</h3>
+              <p style={{margin:"0 0 12px",fontSize:12,color:"#475569"}}>Sorted by urgency · NO EOT allowed · LHDN penalty if missed</p>
+              {(()=>{
+                const taxCases=cases.filter(c=>c.department==="Tax"&&c.taxSubmissionDeadline).sort((a,b)=>new Date(a.taxSubmissionDeadline)-new Date(b.taxSubmissionDeadline));
+                if(!taxCases.length)return <div style={{color:"#334155",fontSize:13}}>No tax cases with deadlines found.</div>;
+                return taxCases.map(cas=>{
+                  const sub=deadlineUrgency(cas.taxSubmissionDeadline);
+                  const fin=deadlineUrgency(cas.taxFinalisationDeadline);
+                  const mtrs=cas.mtrsDeadline?deadlineUrgency(cas.mtrsDeadline):null;
+                  return <div key={cas.id} style={{padding:"11px 12px",borderRadius:9,marginBottom:8,background:"#0a0400",border:`2px solid ${sub?.urgent?"#ef4444":"#92400e"}`,display:"flex",gap:12,alignItems:"flex-start"}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
+                        <span style={{fontFamily:"DM Mono,monospace",fontSize:10,color:"#a78bfa",fontWeight:600}}>{cas.id}</span>
+                        <span style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{cas.clientName}</span>
+                        <span style={{fontSize:11,color:BRANCH_COLORS[cas.branch]}}>{cas.branch}</span>
+                        <span style={{fontSize:11,color:"#64748b"}}>FYE {fmtDate(cas.fye)}</span>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                        <div style={{background:"#120800",borderRadius:5,padding:"6px 9px"}}>
+                          <div style={{fontSize:9,color:"#64748b",marginBottom:2}}>📋 Finalise By</div>
+                          <div style={{fontSize:12,fontWeight:600,color:fin?.color||"#f1f5f9"}}>{fmtDate(cas.taxFinalisationDeadline)}</div>
+                          <div style={{fontSize:10,color:fin?.color||"#64748b"}}>{fin?.label}</div>
+                        </div>
+                        <div style={{background:"#1a0000",borderRadius:5,padding:"6px 9px",border:`1px solid ${sub?.color}55`}}>
+                          <div style={{fontSize:9,color:"#f87171",fontWeight:700,marginBottom:2}}>🚨 TAEF Submit By (NO EOT)</div>
+                          <div style={{fontSize:12,fontWeight:800,color:sub?.color||"#ef4444"}}>{fmtDate(cas.taxSubmissionDeadline)}</div>
+                          <div style={{fontSize:10,color:sub?.color||"#64748b"}}>{sub?.label}</div>
+                        </div>
+                        <div style={{background:"#120800",borderRadius:5,padding:"6px 9px"}}>
+                          <div style={{fontSize:9,color:"#64748b",marginBottom:2}}>📤 MTRS Submit By</div>
+                          <div style={{fontSize:12,fontWeight:600,color:mtrs?.color||"#334155"}}>{cas.mtrsDeadline?fmtDate(cas.mtrsDeadline):"Pending T8"}</div>
+                          <div style={{fontSize:10,color:mtrs?.color||"#334155"}}>{mtrs?.label||"Set when Form C submitted"}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{textAlign:"right",flexShrink:0}}>
+                      <div style={{fontSize:10,color:"#64748b",marginBottom:2}}>Assigned</div>
+                      <div style={{fontSize:12,fontWeight:600,color:"#94a3b8"}}>{cas.assignedTo}</div>
+                      <div style={{fontSize:10,color:"#475569",marginTop:3}}>{stageName(cas,cas.stage)}</div>
+                    </div>
+                  </div>;
+                });
+              })()}
+            </div>
+            <div className="card" style={{padding:18}}>
+              <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700}}>⏰ Case Deadlines — Next 14 Days</h3>
+              {cases.filter(c=>{const d=daysLeft(c.deadline);return d>=0&&d<=14;}).sort((a,b)=>daysLeft(a.deadline)-daysLeft(b.deadline)).length===0?<div style={{color:"#334155",fontSize:13}}>None.</div>:
+                cases.filter(c=>{const d=daysLeft(c.deadline);return d>=0&&d<=14;}).sort((a,b)=>daysLeft(a.deadline)-daysLeft(b.deadline)).map(c=>{
+                  const days=daysLeft(c.deadline),dc2=DEPT_COLORS[c.department];
+                  return <div key={c.id} style={{display:"flex",alignItems:"center",gap:11,padding:"9px 0",borderBottom:"1px solid #0a0e18"}}>
+                    <div style={{width:38,height:38,borderRadius:7,background:days===0?"#2d0a0a":"#0a0e18",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:`1px solid ${days===0?"#7f1d1d":"#1a2235"}`,flexShrink:0}}>
+                      <div style={{fontSize:15,fontWeight:800,color:days===0?"#f87171":days<=3?"#fb923c":"#38bdf8",lineHeight:1}}>{days}</div>
+                      <div style={{fontSize:9,color:"#334155"}}>days</div>
+                    </div>
+                    <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:"#e2e8f0"}}>{c.clientName}</div><div style={{fontSize:11,color:"#475569"}}>{c.department} · {c.branch} · {c.assignedTo}</div></div>
+                    <span className="tag" style={{background:dc2.light,color:dc2.accent,border:`1px solid ${dc2.border}`}}>{c.department.slice(0,3)}</span>
+                  </div>;
+                })
+              }
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════ STAFF ══════════════════ */}
+        {view==="staff"&&canManage&&(
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.04em",color:"#f1f5f9"}}>👥 Staff Management</h2><p style={{margin:"4px 0 0",color:"#334155",fontSize:13}}>Manage accounts, departments & salaries</p></div>
+              {isAdmin&&<button className="btn bp bsm" onClick={()=>{setEditStaffId(null);setStaffForm({name:"",email:"",role:"staff",department:"Audit",branch:"KL",password:"",salary:""});setShowStaffModal(true);}}>+ Add Staff</button>}
+            </div>
+            <div className="card" style={{overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 140px 80px 90px 110px 130px 80px",gap:8,padding:"7px 16px",borderBottom:"1px solid #1a2235"}}>
+                {["Name & Email","Department","Branch","Role","Monthly Salary","Annual KPI Target","Actions"].map(h=><div key={h} style={{fontSize:10,color:"#334155",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.04em"}}>{h}</div>)}
+              </div>
+              {staff.map(s=>{
+                const tgt=kpiTarget(s.salary||0);
+                const isEdSal=editSalaryId===s.id;
+                return <div key={s.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 80px 90px 110px 130px 80px",gap:8,padding:"11px 16px",borderBottom:"1px solid #0a0e18",alignItems:"center"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${s.role==="admin"?"#f59e0b":s.role==="manager"?"#6366f1":"#7c3aed"},${s.role==="admin"?"#ef4444":s.role==="manager"?"#8b5cf6":"#a78bfa"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"white",flexShrink:0}}>{initials(s.name)}</div>
+                    <div><div style={{fontSize:13,fontWeight:700,color:"#e2e8f0"}}>{s.name}</div><div style={{fontSize:11,color:"#475569"}}>{s.email}</div></div>
+                  </div>
+                  <div style={{fontSize:12,color:DEPT_COLORS[s.department]?.accent||"#94a3b8"}}>{s.department}</div>
+                  <div style={{fontSize:12,color:BRANCH_COLORS[s.branch]||"#94a3b8",fontWeight:700}}>{s.branch}</div>
+                  <div><span className="tag" style={{background:s.role==="admin"?"#1c1500":s.role==="manager"?"#0f172a":"#0f0a1f",color:s.role==="admin"?"#f59e0b":s.role==="manager"?"#6366f1":"#a78bfa",border:`1px solid ${s.role==="admin"?"#92400e":s.role==="manager"?"#312e81":"#2d1f4e"}`}}>{s.role}</span></div>
+                  <div>
+                    {isEdSal?(
+                      <div style={{display:"flex",gap:4}}>
+                        <input className="inp" type="number" value={salaryInput} onChange={e=>setSalaryInput(e.target.value)} placeholder="RM" style={{width:70}} onKeyDown={e=>e.key==="Enter"&&(()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,salary:Number(salaryInput)}:x));setEditSalaryId(null);showToast("Salary updated.");})()}/>
+                        <button className="btn bp bsm" onClick={()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,salary:Number(salaryInput)}:x));setEditSalaryId(null);showToast("Updated.");}}>✓</button>
+                        <button className="btn bg bsm" onClick={()=>setEditSalaryId(null)}>×</button>
+                      </div>
+                    ):(
+                      <div style={{display:"flex",alignItems:"center",gap:5}}>
+                        <span style={{fontSize:13,fontWeight:700,color:s.salary?"#e2e8f0":"#334155"}}>{s.salary?fmt(s.salary):"Not set"}</span>
+                        {isAdmin&&<button className="btn bg bsm" style={{fontSize:11,padding:"2px 7px"}} onClick={()=>{setEditSalaryId(s.id);setSalaryInput(s.salary||"");}}>✏</button>}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{fontSize:12,color:s.salary?"#a78bfa":"#334155",fontWeight:600}}>{s.salary?fmt(tgt):"—"}</div>
+                  <div style={{display:"flex",gap:5}}>
+                    {isAdmin&&<button className="btn bg bsm" onClick={()=>{setEditStaffId(s.id);setStaffForm({...s});setShowStaffModal(true);}}>✏</button>}
+                    {isAdmin&&s.id!==currentUser.id&&<button className="btn bg bsm" style={{color:"#f87171",borderColor:"#7f1d1d"}} onClick={()=>{setStaff(p=>p.filter(x=>x.id!==s.id));showToast("Removed.","err");}}>🗑</button>}
+                  </div>
+                </div>;
+              })}
+            </div>
+          </div>
+        )}
+
+      </div>{/* end main padding */}
+
+      {/* ══════ CASE MODAL ══════ */}
+      {showModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.78)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&setShowModal(false)}>
+          <div style={{background:"#0d1117",border:"1px solid #1e293b",borderRadius:16,padding:24,width:530,maxHeight:"92vh",overflowY:"auto"}}>
+            <h2 style={{margin:"0 0 16px",fontSize:16,fontWeight:800}}>
+              {editingId&&isStaff?"Edit Stage / Fee / Notes":editingId?"Edit Case":"New Case"}
+            </h2>
+            {/* Staff restricted edit — only stage, fee, fee status, notes */}
+            {editingId&&isStaff?(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+                <div style={{gridColumn:"1/-1",background:"#0a1020",border:"1px solid #1e293b",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#475569"}}>
+                  🔒 As staff, you can only update the stage, fee, fee status and notes.
+                </div>
+                <div><label>Stage</label>
+                  <select className="inp" value={form.stage||""} onChange={e=>setForm(p=>({...p,stage:e.target.value}))}>
+                    {(()=>{const c2=cases.find(x=>x.id===editingId);return c2?getStages(c2).map(s=><option key={s.id} value={s.id}>{s.id} — {s.label}</option>):null;})()}
+                  </select>
+                </div>
+                <div><label>Fee Status</label><select className="inp" value={form.feeStatus||"Pending"} onChange={e=>setForm(p=>({...p,feeStatus:e.target.value}))}>{["Pending","Invoiced","Received"].map(s=><option key={s}>{s}</option>)}</select></div>
+                <div style={{gridColumn:"1/-1"}}><label>Fee (RM)</label><input className="inp" type="number" value={form.fee||""} onChange={e=>setForm(p=>({...p,fee:e.target.value}))}/></div>
+                <div style={{gridColumn:"1/-1"}}><label>Notes</label><textarea className="inp" value={form.notes||""} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} rows={3} style={{resize:"vertical"}}/></div>
+                <div style={{gridColumn:"1/-1",display:"flex",gap:9,justifyContent:"flex-end"}}>
+                  <button className="btn bg" onClick={()=>setShowModal(false)}>Cancel</button>
+                  <button className="btn bp" onClick={()=>{
+                    setCases(p=>p.map(x=>x.id===editingId?{...x,stage:form.stage,feeStatus:form.feeStatus,fee:form.fee,notes:form.notes}:x));
+                    const upd=cases.find(x=>x.id===editingId);
+                    if(upd){setSelCase({...upd,stage:form.stage,feeStatus:form.feeStatus,fee:form.fee,notes:form.notes});}
+                    addAudit(editingId,"CASE_UPDATED",`Staff update: stage=${form.stage}, fee=${form.feeStatus}`,currentUser);
+                    showToast("Updated.");setShowModal(false);
+                  }}>Save Changes</button>
+                </div>
+              </div>
+            ):(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <div style={{gridColumn:"1/-1"}}><label>Client Name *</label><input className="inp" value={form.clientName||""} onChange={e=>setForm(p=>({...p,clientName:e.target.value}))} placeholder="e.g. Syarikat ABC Sdn Bhd"/></div>
+              <div><label>Department</label><select className="inp" value={form.department||"Audit"} onChange={e=>handleDeptChange(e.target.value)}>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select></div>
+              <div><label>Branch</label><select className="inp" value={form.branch||"KL"} onChange={e=>setForm(p=>({...p,branch:e.target.value}))}>{BRANCHES.map(b=><option key={b}>{b}</option>)}</select></div>
+              {form.department==="Secretary"&&<>
+                <div style={{gridColumn:"1/-1"}}><label>Service Type</label><select className="inp" value={form.secServiceType||"retainer"} onChange={e=>handleSecSvcChange(e.target.value)}>{SEC_SERVICE_TYPES.map(s=><option key={s.id} value={s.id}>{s.label} — {s.billing}</option>)}</select></div>
+                {form.secServiceType&&SEC_SUB_TASKS[form.secServiceType]&&(
+                  <div style={{gridColumn:"1/-1"}}><label>Sub-Tasks</label>
+                    <div style={{background:"#0a0e18",borderRadius:8,padding:"10px 12px",display:"flex",flexWrap:"wrap",gap:6}}>
+                      {SEC_SUB_TASKS[form.secServiceType].map(task=>(
+                        <label key={task} style={{display:"flex",alignItems:"center",gap:6,textTransform:"none",fontSize:12,color:"#94a3b8",letterSpacing:0,fontWeight:400,cursor:"pointer"}}>
+                          <input type="checkbox" checked={(form.secSubTasks||[]).includes(task)} onChange={e=>setForm(p=>({...p,secSubTasks:e.target.checked?[...(p.secSubTasks||[]),task]:(p.secSubTasks||[]).filter(t=>t!==task)}))} style={{width:13,height:13,accentColor:"#6366f1"}}/>
+                          {task}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>}
+              <div><label>Company Type</label><select className="inp" value={form.companyType||"Sdn Bhd"} onChange={e=>setForm(p=>({...p,companyType:e.target.value}))}>{COMPANY_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+              <div><label>Financial Year End</label><input className="inp" type="date" value={form.fye||""} onChange={e=>setForm(p=>({...p,fye:e.target.value}))}/></div>
+              <div><label>Assign To *</label>
+                <select className="inp" value={form.assignedId||""} onChange={e=>{const s=staff.find(x=>x.id===e.target.value);setForm(p=>({...p,assignedId:e.target.value,assignedTo:s?.name||""}));}}>
+                  <option value="">Select staff...</option>
+                  {staff.filter(s=>s.role==="staff").map(s=><option key={s.id} value={s.id}>{s.name} ({s.department} · {s.branch})</option>)}
+                </select>
+              </div>
+              <div><label>Priority</label><select className="inp" value={form.priority||"Normal"} onChange={e=>setForm(p=>({...p,priority:e.target.value}))}>{PRIORITIES.map(p=><option key={p}>{p}</option>)}</select></div>
+              <div><label>Stage</label>
+                <select className="inp" value={form.stage||""} onChange={e=>setForm(p=>({...p,stage:e.target.value}))}>
+                  {(form.department==="Secretary"?(form.secServiceType==="mbrs"||form.secServiceType==="annual_ret"?SEC_MBRS_STAGES:SEC_BASE_STAGES):STAGES_MAP[form.department]||[]).map(s=><option key={s.id} value={s.id}>{s.id} — {s.label}</option>)}
+                </select>
+              </div>
+              <div><label>Deadline *</label><input className="inp" type="date" value={form.deadline||""} onChange={e=>setForm(p=>({...p,deadline:e.target.value}))}/></div>
+              <div><label>Fee (RM)</label><input className="inp" type="number" value={form.fee||""} onChange={e=>setForm(p=>({...p,fee:e.target.value}))} placeholder="0"/></div>
+              <div><label>Fee Status</label><select className="inp" value={form.feeStatus||"Pending"} onChange={e=>setForm(p=>({...p,feeStatus:e.target.value}))}>{["Pending","Invoiced","Received"].map(s=><option key={s}>{s}</option>)}</select></div>
+              <div style={{gridColumn:"1/-1"}}><label>Notes</label><textarea className="inp" value={form.notes||""} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} rows={2} style={{resize:"vertical"}} placeholder="Any notes..."/></div>
+              {form.department==="Audit"&&<div style={{gridColumn:"1/-1",display:"flex",alignItems:"center",gap:8,background:"#13001f",borderRadius:8,padding:"9px 12px",border:"1px solid #5b21b6"}}>
+                <input type="checkbox" checked={!!form.linkedTax} onChange={e=>setForm(p=>({...p,linkedTax:e.target.checked}))} id="lt" style={{width:14,height:14,accentColor:"#6366f1"}}/>
+                <label htmlFor="lt" style={{margin:0,textTransform:"none",fontSize:13,color:"#c4b5fd",letterSpacing:0,fontWeight:400}}>Tax review running simultaneously</label>
+              </div>}
+              {(form.department==="Tax"||form.department==="Audit")&&form.fye&&(()=>{
+                const dl=calcTaxDeadlines(form.fye);
+                if(!dl)return null;
+                return (
+                  <div style={{gridColumn:"1/-1",background:"#0a0400",border:"2px solid #92400e",borderRadius:8,padding:"10px 13px"}}>
+                    <div style={{fontSize:11,color:"#f59e0b",fontWeight:800,marginBottom:6}}>⏰ Auto-calculated Tax Deadlines</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                      <div style={{background:"#120800",borderRadius:6,padding:"7px 10px"}}>
+                        <div style={{fontSize:10,color:"#64748b"}}>📋 Finalisation Deadline</div>
+                        <div style={{fontSize:13,fontWeight:700,color:"#f59e0b"}}>{fmtDate(dl.finalisation)}</div>
+                        <div style={{fontSize:10,color:"#475569"}}>FYE + 7 months</div>
+                      </div>
+                      <div style={{background:"#120800",borderRadius:6,padding:"7px 10px",border:"1px solid #ef444444"}}>
+                        <div style={{fontSize:10,color:"#f87171"}}>🚨 TAEF Submission <span style={{fontWeight:800}}>(NO EOT)</span></div>
+                        <div style={{fontSize:13,fontWeight:800,color:"#ef4444"}}>{fmtDate(dl.submission)}</div>
+                        <div style={{fontSize:10,color:"#f87171"}}>FYE + 8 months — LHDN penalty if missed</div>
+                      </div>
+                      {form.department==="Tax"&&<div style={{background:"#120800",borderRadius:6,padding:"7px 10px",gridColumn:"1/-1"}}>
+                        <div style={{fontSize:10,color:"#64748b"}}>📤 MTRS Deadline</div>
+                        <div style={{fontSize:12,color:"#94a3b8"}}>Auto-set 30 days after Form C submitted (T8 completed)</div>
+                      </div>}
+                    </div>
+                  </div>
+                );
+              })()}
+              {form.department==="Secretary"&&<div style={{gridColumn:"1/-1"}}><label>Linked Audit Case</label><input className="inp" value={form.linkedAudit||""} onChange={e=>setForm(p=>({...p,linkedAudit:e.target.value}))} placeholder="e.g. AUD-2024-001"/></div>}
+              <div style={{display:"flex",gap:9,marginTop:18,justifyContent:"flex-end",gridColumn:"1/-1"}}>
+                <button className="btn bg" onClick={()=>setShowModal(false)}>Cancel</button>
+                <button className="btn bp" onClick={saveCase}>{editingId?"Save Changes":"Add Case"}</button>
+              </div>
+            </div>
+            )}
+          </div>
+        </div>
+      )}
+
+
+      {/* ══════ COMPANY MODAL ══════ */}
+      {showCoModal&&canManage&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.78)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&setShowCoModal(false)}>
+          <div style={{background:"#0d1117",border:"1px solid #1e293b",borderRadius:16,padding:24,width:520,maxHeight:"90vh",overflowY:"auto"}}>
+            <h2 style={{margin:"0 0 16px",fontSize:16,fontWeight:800}}>{editingCoId?"Edit Company":"Add Company"}</h2>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <div style={{gridColumn:"1/-1"}}><label>Company Name *</label><input className="inp" value={coForm.name||""} onChange={e=>setCoForm(p=>({...p,name:e.target.value}))} placeholder="e.g. Syarikat ABC Sdn Bhd"/></div>
+              <div><label>Reg No / LLP No</label><input className="inp" value={coForm.regNo||""} onChange={e=>setCoForm(p=>({...p,regNo:e.target.value}))} placeholder="202001012345"/></div>
+              <div><label>Company Type</label><select className="inp" value={coForm.type||"Sdn Bhd"} onChange={e=>setCoForm(p=>({...p,type:e.target.value}))}>{COMPANY_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+              <div><label>Financial Year End</label><input className="inp" type="date" value={coForm.fye||""} onChange={e=>setCoForm(p=>({...p,fye:e.target.value}))}/></div>
+              <div><label>Branch</label><select className="inp" value={coForm.branch||"KL"} onChange={e=>setCoForm(p=>({...p,branch:e.target.value}))}>{BRANCHES.map(b=><option key={b}>{b}</option>)}</select></div>
+              <div style={{gridColumn:"1/-1"}}><label>Contact Person</label><input className="inp" value={coForm.contactPerson||""} onChange={e=>setCoForm(p=>({...p,contactPerson:e.target.value}))} placeholder="Full name"/></div>
+              <div><label>Phone</label><input className="inp" value={coForm.contactPhone||""} onChange={e=>setCoForm(p=>({...p,contactPhone:e.target.value}))} placeholder="01X-XXXXXXX"/></div>
+              <div><label>Email</label><input className="inp" type="email" value={coForm.contactEmail||""} onChange={e=>setCoForm(p=>({...p,contactEmail:e.target.value}))} placeholder="contact@company.com"/></div>
+              <div style={{gridColumn:"1/-1"}}>
+                <label>Services / Departments</label>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",background:"#0a0e18",borderRadius:8,padding:"10px 12px"}}>
+                  {DEPARTMENTS.map(d=>(
+                    <label key={d} style={{display:"flex",alignItems:"center",gap:6,textTransform:"none",fontSize:12,color:"#94a3b8",letterSpacing:0,fontWeight:400,cursor:"pointer"}}>
+                      <input type="checkbox" checked={(coForm.departments||[]).includes(d)}
+                        onChange={e=>setCoForm(p=>({...p,departments:e.target.checked?[...(p.departments||[]),d]:(p.departments||[]).filter(x=>x!==d)}))}
+                        style={{width:13,height:13,accentColor:"#6366f1"}}/>
+                      <span style={{color:DEPT_COLORS[d]?.accent}}>{d}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={{gridColumn:"1/-1"}}>
+                <label>Assigned Staff</label>
+                <div style={{background:"#0a0e18",borderRadius:8,padding:"10px 12px",display:"flex",flexWrap:"wrap",gap:6}}>
+                  {staff.filter(s=>s.role==="staff").map(s=>(
+                    <label key={s.id} style={{display:"flex",alignItems:"center",gap:6,textTransform:"none",fontSize:12,color:"#94a3b8",letterSpacing:0,fontWeight:400,cursor:"pointer",minWidth:"45%"}}>
+                      <input type="checkbox" checked={(coForm.assignedStaff||[]).includes(s.id)}
+                        onChange={e=>setCoForm(p=>({...p,assignedStaff:e.target.checked?[...(p.assignedStaff||[]),s.id]:(p.assignedStaff||[]).filter(x=>x!==s.id)}))}
+                        style={{width:13,height:13,accentColor:"#6366f1"}}/>
+                      {s.name} <span style={{color:"#334155",fontSize:10}}>({s.department})</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={{gridColumn:"1/-1"}}><label>Notes</label><textarea className="inp" value={coForm.notes||""} onChange={e=>setCoForm(p=>({...p,notes:e.target.value}))} rows={2} style={{resize:"vertical"}} placeholder="Any relevant notes..."/></div>
+            </div>
+            <div style={{display:"flex",gap:9,marginTop:18,justifyContent:"flex-end"}}>
+              <button className="btn bg" onClick={()=>setShowCoModal(false)}>Cancel</button>
+              <button className="btn bp" onClick={saveCompany}>{editingCoId?"Save Changes":"Add Company"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ══════ STAFF MODAL ══════ */}
+      {showStaffModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.78)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&setShowStaffModal(false)}>
+          <div style={{background:"#0d1117",border:"1px solid #1e293b",borderRadius:16,padding:24,width:420}}>
+            <h2 style={{margin:"0 0 16px",fontSize:16,fontWeight:800}}>{editStaffId?"Edit Staff":"Add Staff"}</h2>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <div style={{gridColumn:"1/-1"}}><label>Full Name *</label><input className="inp" value={staffForm.name||""} onChange={e=>setStaffForm(p=>({...p,name:e.target.value}))} placeholder="Full name"/></div>
+              <div style={{gridColumn:"1/-1"}}><label>Email *</label><input className="inp" type="email" value={staffForm.email||""} onChange={e=>setStaffForm(p=>({...p,email:e.target.value}))} placeholder="email@smgroup.my"/></div>
+              <div><label>Department</label><select className="inp" value={staffForm.department||"Audit"} onChange={e=>setStaffForm(p=>({...p,department:e.target.value}))}>{[...DEPARTMENTS,"All"].map(d=><option key={d}>{d}</option>)}</select></div>
+              <div><label>Branch</label><select className="inp" value={staffForm.branch||"KL"} onChange={e=>setStaffForm(p=>({...p,branch:e.target.value}))}>{BRANCHES.map(b=><option key={b}>{b}</option>)}</select></div>
+              <div><label>Role</label><select className="inp" value={staffForm.role||"staff"} onChange={e=>setStaffForm(p=>({...p,role:e.target.value}))}><option value="staff">Staff</option><option value="manager">Manager</option><option value="admin">Admin</option></select></div>
+              <div><label>Monthly Salary (RM)</label><input className="inp" type="number" value={staffForm.salary||""} onChange={e=>setStaffForm(p=>({...p,salary:Number(e.target.value)}))} placeholder="e.g. 3000"/></div>
+              <div style={{gridColumn:"1/-1"}}><label>Password *</label><input className="inp" type="text" value={staffForm.password||""} onChange={e=>setStaffForm(p=>({...p,password:e.target.value}))}/></div>
+              {staffForm.salary>0&&<div style={{gridColumn:"1/-1",background:"#0f0a1f",border:"1px solid #2d1f4e",borderRadius:8,padding:"9px 12px",fontSize:12,color:"#a78bfa"}}>
+                Annual KPI Target: <strong>{fmt(kpiTarget(staffForm.salary))}</strong> ({fmt(staffForm.salary)} × 4.3 × 12)
+              </div>}
+            </div>
+            <div style={{display:"flex",gap:9,marginTop:18,justifyContent:"flex-end"}}>
+              <button className="btn bg" onClick={()=>setShowStaffModal(false)}>Cancel</button>
+              <button className="btn bp" onClick={saveStaff}>{editStaffId?"Save Changes":"Add Staff"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+    const container = document.getElementById("root");
+    const root = ReactDOM.createRoot(container);
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
